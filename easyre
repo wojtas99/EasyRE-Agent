@@ -213,9 +213,10 @@ def triage(src):
         if len(data) > 0x40 and data[:2] != b"MZ":
             e = struct.unpack("<I", data[0x3C:0x40])[0]
             if data[e:e + 4] == b"PE\0\0":
-                fx = f.with_name(f.stem + ".fixed.exe")
+                fx = src.parent / "agent" / (f.stem + ".fixed.exe")
+                fx.parent.mkdir(exist_ok=True)
                 fx.write_bytes(b"MZ" + data[2:])
-                tags.append(f"broken MZ header, repaired copy: {fx.name}")
+                tags.append(f"broken MZ header, repaired copy: agent/{fx.name}")
         if shutil.which("diec") and re.search(r"PE32|ELF|Mach-O|MS-DOS", ft):
             try:
                 die = subprocess.run(["diec", str(f)], capture_output=True, text=True, timeout=60).stdout.strip()
