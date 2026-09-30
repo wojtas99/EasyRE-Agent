@@ -27,6 +27,7 @@ EasyRE-Agent runs an AI agent inside a Docker container. The container holds you
 | ✅ | **Verified answers** | Checks against a regex, a success message, or your own command. The agent keeps working until a candidate passes. |
 | 🎓 | **Hint mode** | The agent solves privately and gives you graded hints, one at a time. The answer stays hidden, including in the console output. |
 | 🧑‍🏫 | **Tutor mode** | An interactive tutor: you tell it what you did, and it guides you step by step without spoiling the answer |
+| 💰 | **Stats** | Totals of time, tokens and cost per model over all jobs |
 | ⏱️ | **Budgets** | Time and token limits per job |
 | 🔁 | **Resumable** | Continue a job later with more time or a different model |
 | 🔎 | **Triage** | File types, runtimes and packers detected up front |
@@ -37,21 +38,66 @@ EasyRE-Agent runs an AI agent inside a Docker container. The container holds you
 
 ## 🚀 Quick start
 
-### 1️⃣ Install Docker
+Pick your system: [🪟 Windows](#-windows) · [🐧 Linux](#-linux) · [🍎 macOS](#-macos)
 
-Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) and start it. You need about 5 GB of free disk space (see [💾 Disk space](#-disk-space)).
+You need about 5 GB of free disk space (see [💾 Disk space](#-disk-space)).
 
-### 2️⃣ Run the setup
+### 🪟 Windows
 
-| Windows | Linux / macOS |
-|---|---|
-| Double-click **`setup.cmd`** | `sh setup.sh` |
+1. **Install Docker.** Get [Docker Desktop](https://www.docker.com/products/docker-desktop/), install it with the default settings (WSL 2), and start it.
+2. **Run the setup.** Double-click **`setup.cmd`** in the project folder. It builds the image, asks which model to use, logs you in and checks everything (see [⚙️ What the setup does](#️-what-the-setup-does)).
+3. **Add a task.** Put the files into a folder under `tasks`:
+   ```
+   tasks\crackme\crackme.exe
+   tasks\crackme\task.md      (description, optional)
+   ```
+4. **Solve it.** Open PowerShell or Command Prompt in the project folder:
+   ```powershell
+   .\easyre.cmd run crackme --success "Correct"
+   .\easyre.cmd open
+   ```
+   The first command solves the task. The second opens the report.
 
-The setup does everything for you:
+### 🐧 Linux
 
-1. checks that Docker runs;
-2. builds the image (the first build takes several minutes);
-3. asks which model you want to use and logs you in:
+1. **Install Docker.** Install [Docker Engine](https://docs.docker.com/engine/install/) with the Compose plugin. Then let your user run Docker without `sudo`, and log out and back in:
+   ```bash
+   sudo usermod -aG docker $USER
+   ```
+2. **Run the setup** in the project folder:
+   ```bash
+   sh setup.sh
+   ```
+3. **Add a task:** put its files into `tasks/crackme/` (plus an optional `task.md` with the description).
+4. **Solve it:**
+   ```bash
+   sh easyre.sh run crackme --success "Correct"
+   sh easyre.sh open
+   ```
+
+> The image is x86-64 (Wine needs 32-bit x86 libraries). On ARM Linux it runs only with x86 emulation (qemu/binfmt) and is slow.
+
+### 🍎 macOS
+
+1. **Install Docker.** Get [Docker Desktop for Mac](https://www.docker.com/products/docker-desktop/) and start it. On Apple Silicon (M1–M4), enable **Settings → General → Use Rosetta for x86_64/amd64 emulation**. The image is x86-64, so it runs emulated there: it works, but builds and runs more slowly.
+2. **Run the setup** in Terminal, in the project folder:
+   ```bash
+   sh setup.sh
+   ```
+3. **Add a task:** put its files into `tasks/crackme/` (plus an optional `task.md` with the description).
+4. **Solve it:**
+   ```bash
+   sh easyre.sh run crackme --success "Correct"
+   sh easyre.sh open
+   ```
+
+> 📝 The examples below use the Windows form `.\easyre.cmd`. On Linux and macOS, write `sh easyre.sh` instead; everything else is the same.
+
+### ⚙️ What the setup does
+
+1. Checks that Docker runs.
+2. Builds the image (the first build takes several minutes).
+3. Asks which model you want to use and logs you in:
 
    | | Choice | You need |
    |---|---|---|
@@ -64,30 +110,9 @@ The setup does everything for you:
    | 🦙 | Ollama (local, free) | Ollama running with a model that supports tool calling |
    | 🖥️ | LM Studio (local, free) | LM Studio server running |
 
-4. runs `easyre doctor` to check that everything works.
-
-### 3️⃣ Solve your first task
-
-Put the task into its own folder:
-
-```
-tasks/
-└── crackme/
-    ├── crackme.exe
-    └── task.md      ← description (optional)
-```
-
-Run:
-
-```powershell
-.\easyre.cmd run crackme --success "Correct"
-```
+4. Runs `easyre doctor` to check that everything works.
 
 `--success` is the text the program prints when the answer is right. Leave it out if the program prints nothing like that.
-
-The report is written to `jobs\crackme-<timestamp>\report.md`. 🎉
-
-> 🐧 On Linux or macOS, use `./easyre.sh` (or `sh easyre.sh`) instead of `.\easyre.cmd`.
 
 ### 🩺 Something wrong?
 
@@ -96,6 +121,8 @@ The report is written to `jobs\crackme-<timestamp>\report.md`. 🎉
 ```
 
 `doctor` checks your model profile, credentials, API connection, Wine and skills. It shows each problem together with how to fix it. To switch models later, run the setup again, or see [🎛️ Profiles](#️-profiles).
+
+**Colors:** the output is colored. If you see codes like `←[32m` instead of colors, use Windows Terminal, or add `NO_COLOR=1` to `.env`.
 
 ---
 
@@ -107,8 +134,10 @@ easyre resume JOB [options]     continue a job
 easyre hint JOB [--answer]      next hint (or reveal the answer)
 easyre tutor JOB                continue a tutor conversation
 easyre jobs                     list jobs
+easyre open [JOB] [folder]      open a job's report (or tutor chat, or folder)
 easyre profiles                 list model profiles
 easyre doctor                   check that the setup works
+easyre stats                    time, tokens and cost per model
 easyre close JOB                mark a job as closed (resume reopens it)
 easyre rm JOB... | --FILTER     delete job folders; filters: --open --closed --unsolved --solved --all
 easyre login claude|codex       authenticate a backend
@@ -140,6 +169,20 @@ easyre login claude|codex       authenticate a backend
 .\easyre.cmd run crackme --backend openai --model qwen3-coder --budget-min 30
 .\easyre.cmd resume crackme --budget-min 60
 ```
+
+### 📂 Opening results
+
+```powershell
+.\easyre.cmd open
+.\easyre.cmd open crackme
+.\easyre.cmd open crackme folder
+```
+
+1. Opens the newest job's `report.md` (or `tutor.md` for tutor jobs) in your default app.
+2. Opens the newest job whose name starts with `crackme`.
+3. Opens that job's folder in Explorer.
+
+`open` runs on your computer, not in Docker, so it starts instantly.
 
 ### 🧑‍🏫 Tutor mode
 
@@ -228,6 +271,16 @@ api_key_env = "OPENROUTER_API_KEY"
 - `resume ... --profile claude-opus` continues the same job with a stronger model.
 
 `api_key_env` reads the key from `.env`, so secrets stay out of the profile file. If you omit `--profile`, the `default` profile is used, or `EASYRE_PROFILE` if it is set in `.env`. Passing `--backend` without `--profile` skips the profiles and uses the backend directly.
+
+---
+
+## 💰 Stats
+
+```powershell
+.\easyre.cmd stats
+```
+
+`easyre stats` sums time, tokens and cost per model over all your jobs. Claude reports its cost itself; this is the API-equivalent price, and a subscription costs nothing extra. For other APIs, add `price_in` and `price_out` (USD per 1M tokens) to the profile in `config/backends.toml`.
 
 ---
 

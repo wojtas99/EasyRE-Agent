@@ -1,5 +1,9 @@
 default = "claude-opus"
 
+# Optional per profile: price_in / price_out = USD per 1M input / output tokens.
+# `easyre stats` uses them to show costs for API models.
+# Example:  price_in = 0.27   price_out = 1.10
+
 [profiles.claude-opus]
 backend = "claude"
 model = "opus"

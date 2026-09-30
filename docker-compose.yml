@@ -2,10 +2,12 @@ services:
   easyre:
     image: easyre-agent
     build: .
+    platform: linux/amd64
     env_file: .env
     environment:
       IS_SANDBOX: "1"
       WINEDEBUG: "-all"
+      FORCE_COLOR: "1"
     volumes:
       - ./tasks:/tasks
       - ./jobs:/jobs

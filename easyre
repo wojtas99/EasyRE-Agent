@@ -7,7 +7,9 @@
   easyre tutor JOB                 continue a tutor conversation
   easyre jobs                      list jobs
   easyre profiles                  list model profiles (config/backends.toml)
+  easyre open [JOB] [folder]       (host) open the newest job's report, tutor chat or folder
   easyre doctor                    check that the setup works
+  easyre stats                     time, tokens and cost per model over all jobs
   easyre close JOB                 mark a job as closed (resume reopens it)
   easyre rm JOB... | --FILTER [-y] delete job folders; filters: --open --closed --unsolved --solved --all
   easyre login claude|codex        authenticate a backend
@@ -39,18 +41,40 @@ WORK = Path("/work")
 ARCHIVES = (".7z", ".zip", ".rar", ".gz", ".xz", ".tar", ".tgz", ".bz2")
 
 
-def log(*a):
-    print("[easyre]", *a, file=sys.stderr, flush=True)
+COLOR = not os.environ.get("NO_COLOR") and (sys.stderr.isatty() or bool(os.environ.get("FORCE_COLOR")))
+CODES = {"red": "31", "green": "32", "yellow": "33", "blue": "34", "magenta": "35", "cyan": "36", "dim": "2", "bold": "1"}
 
 
-QUIET = {"on": False, "n": 0}
+def paint(text, *styles):
+    if not COLOR or not styles:
+        return str(text)
+    return "\033[" + ";".join(CODES[x] for x in styles) + "m" + str(text) + "\033[0m"
+
+
+def log(*a, color=None):
+    msg = " ".join(str(x) for x in a)
+    if color is None:
+        low = msg.lower()
+        if low.startswith(("run failed", "api error", "error")) or "failed" in low[:40]:
+            color = "red"
+        elif low.startswith(("solved", "hints ready", "tutor ready")):
+            color = "green"
+        elif low.startswith(("budget", "stopped", "agent stopped", "transient", "previous agent session")):
+            color = "yellow"
+        elif low.startswith(("agent:",)):
+            color = "bold"
+    print(paint("[easyre]", "dim"), paint(msg, color) if color else msg, file=sys.stderr, flush=True)
+
+
+QUIET = {"on": False, "n": 0, "t0": time.time()}
 
 
 def activity(label, text):
     if QUIET["on"]:
         QUIET["n"] += 1
         if QUIET["n"] % 5 == 1:
-            log(f"working... ({QUIET['n']} steps, details hidden in hint mode)")
+            e = int(time.time() - QUIET["t0"])
+            log(f"{e // 60}:{e % 60:02d}  agent is working: {QUIET['n']} actions so far (details hidden so the answer is not spoiled)", color="cyan")
         return
     log(label, text)
 
@@ -610,6 +634,7 @@ def drive(job, cfg, interactive=False):
     link_work(job)
     apply_profile(cfg)
     QUIET["on"] = cfg["mode"] in ("hint", "tutor") and not os.environ.get("EASYRE_VERBOSE")
+    QUIET["t0"] = time.time()
     setup_backend(cfg)
     ins = instructions(cfg)
     m = meta(job)
@@ -741,7 +766,7 @@ def tutor_chat(job, cfg):
             o.write(f"**Tutor:** {reply}\n\n")
     while True:
         try:
-            user = input("you> ").strip()
+            user = input(paint("you> ", "cyan", "bold")).strip()
         except (EOFError, KeyboardInterrupt):
             print()
             break
@@ -961,8 +986,9 @@ def jobs(_):
     for d in js:
         c = jload(meta(d) / "job.json") or {}
         st = job_status(d)
+        stc = {"solved": "green", "hints": "green", "tutor": "green", "open": "yellow", "closed": "dim"}.get(st)
         e = int(c.get("elapsed_s", 0))
-        print(f"{d.name:45} {st:7} {c.get('backend', ''):7} {c.get('mode', ''):5} {e // 60:>3}:{e % 60:02d} {c.get('tokens', 0):>9} tok")
+        print(f"{d.name:45} {paint(f'{st:7}', stc) if stc else f'{st:7}'} {c.get('backend', ''):7} {c.get('mode', ''):5} {e // 60:>3}:{e % 60:02d} {c.get('tokens', 0):>9} tok")
     return 0
 
 
@@ -1008,7 +1034,8 @@ def doctor(argv):
     def line(good, what, hint=""):
         nonlocal ok
         ok = ok and good
-        print(f"  {'OK ' if good else 'ERR'}  {what}" + (f"\n       -> {hint}" if hint and not good else ""))
+        mark = paint("OK ", "green", "bold") if good else paint("ERR", "red", "bold")
+        print(f"  {mark}  {what}" + (paint(f"\n       -> {hint}", "yellow") if hint and not good else ""))
 
     print("EasyRE doctor\n")
     data = load_profiles()
@@ -1059,6 +1086,58 @@ def doctor(argv):
     return 0 if ok else 1
 
 
+def job_cost(cfg):
+    if cfg.get("cost_usd"):
+        return float(cfg["cost_usd"])
+    p = ((load_profiles().get("profiles") or {}).get(cfg.get("profile") or "") or {})
+    if "price_in" in p or "price_out" in p:
+        return (cfg.get("tokens_in", 0) * float(p.get("price_in", 0)) + cfg.get("tokens", 0) * float(p.get("price_out", 0))) / 1e6
+    return None
+
+
+def fmt_time(sec):
+    sec = int(sec)
+    return f"{sec // 3600}h{sec % 3600 // 60:02d}m" if sec >= 3600 else f"{sec // 60}:{sec % 60:02d}"
+
+
+def fmt_cost(c):
+    if c is None:
+        return "-"
+    return f"${c:.2f}" if c >= 1 or c == 0 else f"${c:.4f}"
+
+
+def stats(_):
+    rows = {}
+    for d in all_jobs():
+        c = jload(meta(d) / "job.json") or {}
+        key = c.get("profile") or f"{c.get('backend', '?')}:{c.get('model') or '-'}"
+        r = rows.setdefault(key, {"jobs": 0, "done": 0, "time": 0, "out": 0, "in": 0, "cost": 0.0, "known": True})
+        r["jobs"] += 1
+        r["done"] += job_status(d) in ("solved", "hints", "tutor")
+        r["time"] += int(c.get("elapsed_s", 0))
+        r["out"] += int(c.get("tokens", 0))
+        r["in"] += int(c.get("tokens_in", 0))
+        cost = job_cost(c)
+        if cost is None:
+            r["known"] = False
+        else:
+            r["cost"] += cost
+    if not rows:
+        print("no jobs yet")
+        return 0
+    print(f"{'PROFILE':26} {'JOBS':>4} {'DONE':>4} {'TIME':>7} {'TOKENS OUT':>11} {'TOKENS IN':>11} {'COST':>9}")
+    tot = {"jobs": 0, "done": 0, "time": 0, "out": 0, "in": 0, "cost": 0.0}
+    for k, r in sorted(rows.items()):
+        cost = fmt_cost(r["cost"]) + ("" if r["known"] else "*")
+        print(f"{k:26} {r['jobs']:>4} {r['done']:>4} {fmt_time(r['time']):>7} {r['out']:>11,} {r['in']:>11,} {cost:>9}")
+        for x in tot:
+            tot[x] += r[x]
+    print(f"{'TOTAL':26} {tot['jobs']:>4} {tot['done']:>4} {fmt_time(tot['time']):>7} {tot['out']:>11,} {tot['in']:>11,} {fmt_cost(tot['cost']):>9}")
+    print("\nCOST for Claude is the API-equivalent price (a subscription costs nothing extra).")
+    print("* = cost unknown for some jobs: add price_in / price_out (USD per 1M tokens) to the profile in config/backends.toml.")
+    return 0
+
+
 def login(argv):
     what = argv[0] if argv else ""
     if what == "claude":
@@ -1094,7 +1173,7 @@ def main():
         print(__doc__)
         return 0
     cmd, rest = a[0], a[1:]
-    simple = {"check": check, "done": done, "hint": hint, "jobs": jobs, "login": login, "profiles": profiles, "close": close, "rm": remove, "doctor": doctor, "tutor": tutor}
+    simple = {"check": check, "done": done, "hint": hint, "jobs": jobs, "login": login, "profiles": profiles, "close": close, "rm": remove, "doctor": doctor, "tutor": tutor, "stats": stats}
     if cmd in simple:
         return simple[cmd](rest)
     if cmd not in ("run", "resume"):
@@ -1137,5 +1216,27 @@ def main():
     return drive(job, cfg, args.i)
 
 
+def run_main():
+    try:
+        return main() or 0
+    except KeyboardInterrupt:
+        print(paint("\nstopped.", "yellow"), file=sys.stderr)
+        return 130
+    except SystemExit as e:
+        if isinstance(e.code, str):
+            print(paint("error: ", "red", "bold") + e.code, file=sys.stderr)
+            return 1
+        return e.code or 0
+    except Exception as e:
+        import traceback
+        JOBS.mkdir(parents=True, exist_ok=True)
+        f = JOBS / "_errors.log"
+        with open(f, "a") as o:
+            o.write(f"\n=== {time.strftime('%F %T')} easyre {' '.join(sys.argv[1:])}\n{traceback.format_exc()}")
+        print(paint("error: ", "red", "bold") + f"{e.__class__.__name__}: {e}", file=sys.stderr)
+        print(paint("Something went wrong inside easyre. Full details are in jobs/_errors.log; paste them in an issue or chat.", "yellow"), file=sys.stderr)
+        return 1
+
+
 if __name__ == "__main__":
-    sys.exit(main() or 0)
+    sys.exit(run_main())
