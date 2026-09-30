@@ -28,6 +28,7 @@ run/resume options:
   --budget-min N                   wall clock budget in minutes (default 120)
   --budget-tokens N                token budget (default: none)
   --name NAME                      job name
+  --logs                           stream the agent's commands instead of a progress bar
   -i                               interactive (claude/codex TUI)
 """
 import argparse, json, tomllib, os, re, shutil, signal, struct, subprocess, sys, threading, time, urllib.request
@@ -52,6 +53,8 @@ def paint(text, *styles):
 
 
 def log(*a, color=None):
+    if PROG.get("last") is not None and not PROG["logs"] and (sys.stderr.isatty() or os.environ.get("FORCE_COLOR")) and PROG["n"]:
+        sys.stderr.write("\r\033[K"); sys.stderr.flush()
     msg = " ".join(str(x) for x in a)
     if color is None:
         low = msg.lower()
@@ -63,20 +66,62 @@ def log(*a, color=None):
             color = "yellow"
         elif low.startswith(("agent:",)):
             color = "bold"
-    print(paint("[easyre]", "dim"), paint(msg, color) if color else msg, file=sys.stderr, flush=True)
+        elif re.match(r"^(\$|bash:|read:|write:|edit:|grep:|glob:|task:|agent\S*:|read_file:|write_file:|read_skill:)", low):
+            color = "blue"
+    print(paint("[easyre]", "cyan"), paint(msg, color) if color else msg, file=sys.stderr, flush=True)
 
 
-QUIET = {"on": False, "n": 0, "t0": time.time()}
+PROG = {"logs": False, "hidden": False, "n": 0, "t0": time.time(), "last": ""}
+
+
+SPINNER = "|/-\\"
+
+
+def progress_tick(note=""):
+    PROG["n"] += 1
+    if not sys.stderr.isatty() and not os.environ.get("FORCE_COLOR"):
+        if PROG["n"] % 10 == 1:
+            e = int(time.time() - PROG["t0"])
+            log(f"working... {PROG['n']} steps, {e // 60}:{e % 60:02d}", color="cyan")
+        return
+    e = int(time.time() - PROG["t0"])
+    spin = SPINNER[PROG["n"] % len(SPINNER)]
+    note = PROG["last"] if not note else note
+    PROG["last"] = note
+    line = paint(f" {spin} working  {PROG['n']} steps  {e // 60}:{e % 60:02d}", "cyan") + (paint(f"   {note}", "dim") if note else "")
+    sys.stderr.write("\r\033[K" + line)
+    sys.stderr.flush()
+
+
+def progress_end():
+    if (sys.stderr.isatty() or os.environ.get("FORCE_COLOR")) and PROG["n"]:
+        sys.stderr.write("\r\033[K")
+        sys.stderr.flush()
 
 
 def activity(label, text):
-    if QUIET["on"]:
-        QUIET["n"] += 1
-        if QUIET["n"] % 5 == 1:
-            e = int(time.time() - QUIET["t0"])
-            log(f"{e // 60}:{e % 60:02d}  agent is working: {QUIET['n']} actions so far (details hidden so the answer is not spoiled)", color="cyan")
+    if not PROG["logs"]:
+        note = ""
+        if not PROG["hidden"]:
+            if label == "agent:":
+                note = "thinking: " + str(text).strip().replace("\n", " ")[:60]
+            else:
+                first = re.sub(r"^cd /work\s*(;|&&)\s*", "", str(text).strip().splitlines()[0] if str(text).strip() else "")
+                note = (label.rstrip(":") or "run") + ": " + first[:60]
+        progress_tick(note)
         return
-    log(label, text)
+    if label == "agent:":
+        log(paint("agent:", "bold") + " " + text.strip().replace("\n", " ")[:300], color="")
+        return
+    text = str(text).strip()
+    body = [l for l in text.splitlines() if l.strip()]
+    first = body[0] if body else ""
+    first = re.sub(r"^cd /work\s*(;|&&)\s*", "", first)
+    if len(first) > 110:
+        first = first[:107] + "..."
+    extra = f"  (+{len(body) - 1} more lines)" if len(body) > 1 else ""
+    tool = label.rstrip(":") or "output"
+    log(f"  {tool:<6} {first}{extra}", color="blue")
 
 
 def meta(job=None):
@@ -171,6 +216,12 @@ def triage(src):
                 fx = f.with_name(f.stem + ".fixed.exe")
                 fx.write_bytes(b"MZ" + data[2:])
                 tags.append(f"broken MZ header, repaired copy: {fx.name}")
+        if shutil.which("diec") and re.search(r"PE32|ELF|Mach-O|MS-DOS", ft):
+            try:
+                die = subprocess.run(["diec", str(f)], capture_output=True, text=True, timeout=60).stdout.strip()
+                tags += [f"DIE: {l.strip()}" for l in die.splitlines()[1:8] if l.strip()]
+            except (subprocess.TimeoutExpired, OSError):
+                pass
         lines.append(f"- {f.relative_to(src)} ({f.stat().st_size} B): {ft}" + "".join(f"\n  - {t}" for t in tags))
         if re.search(r"PE32|ELF", ft) and "Mono/.Net" not in ft and not any("python" in t or "dotnet" in t for t in tags) \
                 and ".fixed." not in f.name:
@@ -229,10 +280,23 @@ def instructions(cfg):
     return t + "\n".join(v) + "\n"
 
 
+def host_path(p):
+    p = str(p)
+    if Path(p).exists():
+        return Path(p)
+    norm = p.replace("\\", "/")
+    low = norm.lower()
+    for key, base in (("/tasks/", TASKS), ("/jobs/", JOBS)):
+        i = low.rfind(key)
+        if i >= 0:
+            return base / norm[i + len(key):]
+    if low.startswith("tasks/"):
+        return TASKS / norm[6:]
+    return TASKS / norm
+
+
 def prepare(args):
-    target = Path(args.target)
-    if not target.is_absolute() and not target.exists():
-        target = TASKS / args.target
+    target = host_path(args.target)
     if not target.exists():
         sys.exit(f"target not found: {args.target} (put tasks under ./tasks on the host)")
     name = args.name or re.sub(r"[^A-Za-z0-9_.-]+", "_", target.stem if target.is_file() else target.name)
@@ -243,7 +307,10 @@ def prepare(args):
     (job / "agent").mkdir()
     desc = args.desc or ""
     if args.desc_file:
-        desc = Path(args.desc_file).read_text(errors="replace")
+        f = host_path(args.desc_file)
+        if not f.is_file():
+            sys.exit(f"description file not found: {args.desc_file} (put it into the tasks folder, e.g. tasks\\{target.name}\\README.md)")
+        desc = f.read_text(errors="replace")
     if target.is_dir():
         for f in sorted(target.iterdir()):
             if f.is_file() and f.name.lower() in ("task.md", "task.txt", "opis.txt", "opis.md", "readme.md", "readme.txt") and not desc:
@@ -633,8 +700,10 @@ def setup_backend(cfg):
 def drive(job, cfg, interactive=False):
     link_work(job)
     apply_profile(cfg)
-    QUIET["on"] = cfg["mode"] in ("hint", "tutor") and not os.environ.get("EASYRE_VERBOSE")
-    QUIET["t0"] = time.time()
+    PROG["hidden"] = cfg["mode"] in ("hint", "tutor")
+    PROG["logs"] = (cfg.get("logs") or bool(os.environ.get("EASYRE_VERBOSE"))) and not PROG["hidden"]
+    PROG["t0"] = time.time()
+    PROG["n"] = 0
     setup_backend(cfg)
     ins = instructions(cfg)
     m = meta(job)
@@ -986,7 +1055,7 @@ def jobs(_):
     for d in js:
         c = jload(meta(d) / "job.json") or {}
         st = job_status(d)
-        stc = {"solved": "green", "hints": "green", "tutor": "green", "open": "yellow", "closed": "dim"}.get(st)
+        stc = {"solved": "green", "hints": "green", "tutor": "green", "open": "yellow", "closed": "blue"}.get(st)
         e = int(c.get("elapsed_s", 0))
         print(f"{d.name:45} {paint(f'{st:7}', stc) if stc else f'{st:7}'} {c.get('backend', ''):7} {c.get('mode', ''):5} {e // 60:>3}:{e % 60:02d} {c.get('tokens', 0):>9} tok")
     return 0
@@ -1165,6 +1234,7 @@ def opts(p):
     p.add_argument("--name")
     p.add_argument("-i", action="store_true")
     p.add_argument("--force", action="store_true")
+    p.add_argument("--logs", action="store_true")
 
 
 def main():
@@ -1193,6 +1263,7 @@ def main():
             args.model = os.environ.get("EASYRE_MODEL") or ({"claude": "opus"}.get(args.backend))
         job, cfg = prepare(args)
         cfg["profile"] = prof
+        cfg["logs"] = args.logs
         jsave(meta(job) / "job.json", cfg)
     else:
         job = find_job(args.job)
@@ -1212,6 +1283,8 @@ def main():
         if args.backend and args.backend != jload(meta(job) / "job.json").get("backend"):
             cfg["session"] = None
         jsave(meta(job) / "job.json", cfg)
+    if getattr(args, "logs", False):
+        cfg["logs"] = True
     log(f"job {job.name}: profile={cfg.get('profile') or '-'} backend={cfg['backend']} model={cfg.get('model')} mode={cfg['mode']} budget={cfg['budget_min']} min")
     return drive(job, cfg, args.i)
 

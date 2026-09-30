@@ -38,11 +38,11 @@ EasyRE-Agent runs an AI agent inside a Docker container. The container holds you
 
 ## 🚀 Quick start
 
-Pick your system: [🪟 Windows](#-windows) · [🐧 Linux](#-linux) · [🍎 macOS](#-macos)
+Pick your system: [💻 Windows](#-windows) · [🐧 Linux](#-linux) · [🍎 macOS](#-macos)
 
 You need about 5 GB of free disk space (see [💾 Disk space](#-disk-space)).
 
-### 🪟 Windows
+### 💻 Windows
 
 1. **Install Docker.** Get [Docker Desktop](https://www.docker.com/products/docker-desktop/), install it with the default settings (WSL 2), and start it.
 2. **Run the setup.** Double-click **`setup.cmd`** in the project folder. It builds the image, asks which model to use, logs you in and checks everything (see [⚙️ What the setup does](#️-what-the-setup-does)).
@@ -154,6 +154,7 @@ easyre login claude|codex       authenticate a backend
 | `--model` | Model name for the backend |
 | `--mode` | `solve` (default), `hint` or `tutor` |
 | `--budget-min` / `--budget-tokens` | Time budget in minutes (default 120) and output-token budget |
+| `--logs` | Stream the agent's commands live instead of the progress bar |
 | `-i` | Interactive session (Claude Code / Codex UI) |
 
 ### 📌 Examples
