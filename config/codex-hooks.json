@@ -1,0 +1,3 @@
+{"hooks": {
+  "Stop": [{"hooks": [{"type": "command", "command": "/opt/easyre/config/stop_hook.sh", "timeout": 10}]}]
+}}

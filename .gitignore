@@ -1,0 +1,8 @@
+.env
+jobs/
+tasks/*
+!tasks/.gitkeep
+__pycache__/
+.idea
+tasks/
+.git/

@@ -1,0 +1,29 @@
+services:
+  easyre:
+    image: easyre-agent
+    build: .
+    env_file: .env
+    environment:
+      IS_SANDBOX: "1"
+      WINEDEBUG: "-all"
+    volumes:
+      - ./tasks:/tasks
+      - ./jobs:/jobs
+      - easyre-state:/state
+      - ./easyre:/usr/local/bin/easyre:ro
+      - ./config:/opt/easyre/config:ro
+      - ./skills:/opt/easyre/skills:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+    shm_size: 2g
+    init: true
+    stdin_open: true
+    tty: true
+    working_dir: /jobs
+
+volumes:
+  easyre-state:

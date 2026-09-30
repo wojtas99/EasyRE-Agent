@@ -1,0 +1,46 @@
+default = "claude-opus"
+
+[profiles.claude-opus]
+backend = "claude"
+model = "opus"
+
+[profiles.claude-sonnet]
+backend = "claude"
+model = "sonnet"
+
+[profiles.claude-haiku]
+backend = "claude"
+model = "haiku"
+
+[profiles.openai-api]
+backend = "openai"
+base_url = "https://api.openai.com/v1"
+model = "gpt-4.1"
+api_key_env = "OPENAI_API_KEY"
+
+[profiles.codex]
+backend = "codex"
+
+[profiles.ollama-qwen]
+backend = "openai"
+base_url = "http://host.docker.internal:11434/v1"
+model = "qwen3-coder"
+api_key = "ollama"
+
+[profiles.lmstudio]
+backend = "openai"
+base_url = "http://host.docker.internal:1234/v1"
+model = "local-model"
+api_key = "lm-studio"
+
+[profiles.openrouter]
+backend = "openai"
+base_url = "https://openrouter.ai/api/v1"
+model = "deepseek/deepseek-chat"
+api_key_env = "OPENROUTER_API_KEY"
+
+[profiles.gemini]
+backend = "openai"
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+model = "gemini-2.5-pro"
+api_key_env = "GEMINI_API_KEY"

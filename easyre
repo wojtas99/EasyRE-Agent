@@ -1,0 +1,1141 @@
+#!/usr/bin/env python3
+"""EasyRE-Agent - reverse engineering agent in a box.
+
+  easyre run TARGET [options]      solve a task (file or folder under /tasks)
+  easyre resume JOB [options]      continue an existing job
+  easyre hint JOB                  show the next hint of a hint-mode job
+  easyre tutor JOB                 continue a tutor conversation
+  easyre jobs                      list jobs
+  easyre profiles                  list model profiles (config/backends.toml)
+  easyre doctor                    check that the setup works
+  easyre close JOB                 mark a job as closed (resume reopens it)
+  easyre rm JOB... | --FILTER [-y] delete job folders; filters: --open --closed --unsolved --solved --all
+  easyre login claude|codex        authenticate a backend
+  easyre check CANDIDATE           (agent) verify a candidate answer
+  easyre done                      (agent, hint mode) mark hints as finished
+
+run/resume options:
+  --desc TEXT | --desc-file FILE   task description (default: task.md / README.md in the target folder)
+  --success REGEX                  output that means the answer was accepted, e.g. "Correct|Success"
+  --flag-format REGEX              shape of the answer, e.g. "flag\\{.*\\}"
+  --verify CMD                     command that checks a candidate ({} = candidate, otherwise sent on stdin)
+  --profile NAME                   model profile from config/backends.toml
+  --backend claude|codex|openai    default: claude
+  --model NAME                     backend model (claude: opus/sonnet, codex: gpt-..., openai: any)
+  --mode solve|hint|tutor          default: solve
+  --budget-min N                   wall clock budget in minutes (default 120)
+  --budget-tokens N                token budget (default: none)
+  --name NAME                      job name
+  -i                               interactive (claude/codex TUI)
+"""
+import argparse, json, tomllib, os, re, shutil, signal, struct, subprocess, sys, threading, time, urllib.request
+from pathlib import Path
+
+TASKS = Path(os.environ.get("EASYRE_TASKS", "/tasks"))
+JOBS = Path(os.environ.get("EASYRE_JOBS", "/jobs"))
+STATE = Path(os.environ.get("EASYRE_STATE", "/state"))
+CONF = Path(os.environ.get("EASYRE_CONF", "/opt/easyre/config"))
+WORK = Path("/work")
+ARCHIVES = (".7z", ".zip", ".rar", ".gz", ".xz", ".tar", ".tgz", ".bz2")
+
+
+def log(*a):
+    print("[easyre]", *a, file=sys.stderr, flush=True)
+
+
+QUIET = {"on": False, "n": 0}
+
+
+def activity(label, text):
+    if QUIET["on"]:
+        QUIET["n"] += 1
+        if QUIET["n"] % 5 == 1:
+            log(f"working... ({QUIET['n']} steps, details hidden in hint mode)")
+        return
+    log(label, text)
+
+
+def meta(job=None):
+    return Path(job or WORK) / ".easyre"
+
+
+def migrate(job):
+    job = Path(job)
+    if not (job / "job.json").exists() or (job / ".easyre" / "job.json").exists():
+        return job
+    m = job / ".easyre"
+    m.mkdir(exist_ok=True)
+    (job / "agent").mkdir(exist_ok=True)
+    moves = {"job.json": "job.json", "log.jsonl": "log.jsonl", "attempts.log": "attempts.log", "ANSWER": "ANSWER",
+             "CHECK": "CHECK", "DONE": "DONE", "CLOSED": "CLOSED", ".answer": "answer", ".hint_idx": "hint_idx",
+             ".openai_history.json": "openai_history.json", "triage.md": "triage.md", "instructions.md": "instructions.md",
+             ".start": "start", "start": "start", ".stops": "stops"}
+    for old, new in moves.items():
+        if (job / old).exists() and not (m / new).exists():
+            (job / old).rename(m / new)
+    for old in ("AGENTS.md", "CLAUDE.md", ".start", "start"):
+        (job / old).unlink(missing_ok=True)
+    for old in ("notes.md", "tmp", "prefetch", "lanes"):
+        if (job / old).exists() and not (job / "agent" / old).exists():
+            (job / old).rename(job / "agent" / old)
+    return job
+
+
+def jload(p, default=None):
+    try:
+        return json.loads(Path(p).read_text())
+    except (OSError, ValueError):
+        return default
+
+
+def jsave(p, obj):
+    Path(p).write_text(json.dumps(obj, indent=1))
+
+
+def extract(f, dst):
+    dst.mkdir(parents=True, exist_ok=True)
+    if f.suffix.lower() in ARCHIVES:
+        for pw in ["", "infected", "flare", "crackmes.one", "crackmes.de"]:
+            r = subprocess.run(["7z", "x", "-y", f"-p{pw}", f"-o{dst}", str(f)], capture_output=True)
+            if r.returncode in (0, 1):
+                return True
+        log(f"could not extract {f.name}; copying as-is")
+    shutil.copy2(f, dst / f.name)
+    return False
+
+
+SKILLS = Path(os.environ.get("EASYRE_SKILLS", "/opt/easyre/skills"))
+PREFETCH = Path(os.environ.get("EASYRE_PREFETCH", "/opt/easyre/tools/prefetch"))
+MARKERS = [
+    (b"MEI\x0c\x0b\x0a\x0b\x0e", "python-bundle", "PyInstaller archive"),
+    (b"PYZ-00.pyz", "python-bundle", "PyInstaller archive"),
+    (b"Nuitka", "python-bundle", "Nuitka build"),
+    (b"mscoree.dll", "dotnet", ".NET assembly"),
+    (b"UnityPlayer", "dotnet", "Unity game"),
+    (b"global-metadata.dat", "dotnet", "Unity IL2CPP"),
+    (b"UPX!", "packed", "UPX"),
+    (b"AU3!EA06", "script-bundle", "AutoIt script"),
+    (b"app.asar", "javascript", "Electron app"),
+    (b"Go build ID", "native-go", "Go binary"),
+    (b"/rustc/", "native-rust", "Rust binary"),
+    (b"MSVBVM60", "native", "Visual Basic 6"),
+    (b"Qt5Core", "native", "Qt5"),
+    (b"Qt6Core", "native", "Qt6"),
+    (b"classes.dex", "jvm", "Android APK"),
+    (b"META-INF/MANIFEST.MF", "jvm", "Java archive"),
+    (b"\x00asm", "wasm", "WebAssembly"),
+]
+
+
+def skill_names():
+    return sorted(d.name for d in SKILLS.iterdir() if (d / "SKILL.md").exists()) if SKILLS.is_dir() else []
+
+
+def triage(src):
+    lines, native = [], []
+    files = sorted(p for p in src.rglob("*") if p.is_file())
+    for f in files[:200]:
+        ft = subprocess.run(["file", "-b", str(f)], capture_output=True, text=True).stdout.strip()
+        try:
+            data = f.read_bytes()[: 96 << 20]
+        except OSError:
+            data = b""
+        tags = sorted({f"{label} [{kind}]" for sig, kind, label in MARKERS if sig in data})
+        if len(data) > 0x40 and data[:2] != b"MZ":
+            e = struct.unpack("<I", data[0x3C:0x40])[0]
+            if data[e:e + 4] == b"PE\0\0":
+                fx = f.with_name(f.stem + ".fixed.exe")
+                fx.write_bytes(b"MZ" + data[2:])
+                tags.append(f"broken MZ header, repaired copy: {fx.name}")
+        lines.append(f"- {f.relative_to(src)} ({f.stat().st_size} B): {ft}" + "".join(f"\n  - {t}" for t in tags))
+        if re.search(r"PE32|ELF", ft) and "Mono/.Net" not in ft and not any("python" in t or "dotnet" in t for t in tags) \
+                and ".fixed." not in f.name:
+            native.append(f)
+    if len(files) > 200:
+        lines.append(f"- ... {len(files) - 200} more files")
+    if native and PREFETCH.exists() and os.access(PREFETCH, os.X_OK):
+        f = max(native, key=lambda p: (p.suffix.lower() != ".dll", p.stat().st_size))
+        out = WORK / "agent" / "prefetch"
+        out.mkdir(parents=True, exist_ok=True)
+        subprocess.Popen([str(PREFETCH), str(f), str(out)], stdout=open(out / "prefetch.log", "w"),
+                         stderr=subprocess.STDOUT, start_new_session=True)
+        lines.append(f"\nBackground analysis of `{f.name}` started -> /work/agent/prefetch/ (log prefetch.log)")
+    return "\n".join(lines)
+
+
+def auto_verify(src, success):
+    if not success:
+        return ""
+    exes = [p for p in src.rglob("*") if p.is_file() and ".fixed." not in p.name]
+    pes = [p for p in exes if p.suffix.lower() == ".exe"]
+    if len(pes) == 1 and shutil.which("wine"):
+        return f"wine /work/src/{pes[0].relative_to(src)}"
+    elfs = [p for p in exes if p.read_bytes()[:4] == b"\x7fELF"]
+    if len(elfs) == 1:
+        os.chmod(elfs[0], 0o755)
+        return f"/work/src/{elfs[0].relative_to(src)}"
+    return ""
+
+
+def link_work(job):
+    if WORK.is_symlink():
+        WORK.unlink()
+    elif WORK.exists():
+        shutil.rmtree(WORK)
+    WORK.symlink_to(Path(job).resolve(), target_is_directory=True)
+
+
+def instructions(cfg):
+    mode = cfg["mode"]
+    t = (CONF / "AGENT.md").read_text()
+    t += "\n" + (CONF / {"hint": "MODE_HINT.md", "tutor": "MODE_TUTOR.md"}.get(mode, "MODE_SOLVE.md")).read_text()
+    names = skill_names()
+    t += "\n## Skills available\n" + ("\n".join(f"- `{n}`: {SKILLS / n / 'SKILL.md'}" for n in names) if names else "- none installed") + "\n"
+    tools = CONF / "TOOLS.md"
+    if tools.exists():
+        t += "\n" + tools.read_text()
+    v = ["\n## Verification set up for this job"]
+    v.append(f"- Answer format: `{cfg['flag_format']}`" if cfg.get("flag_format") else "- Answer format: not given.")
+    if cfg.get("verify"):
+        v.append(f"- `easyre check` runs: `{cfg['verify']}` and looks for `{cfg.get('success') or '(exit code 0)'}` in the output.")
+    elif cfg.get("success"):
+        v.append(f"- Success output: `{cfg['success']}`. No run command was set, so run the target yourself and show the success output in the report.")
+    else:
+        v.append("- No automatic check. Prove the answer yourself (run the target, or reimplement the check and show it passes) before `easyre check`.")
+    return t + "\n".join(v) + "\n"
+
+
+def prepare(args):
+    target = Path(args.target)
+    if not target.is_absolute() and not target.exists():
+        target = TASKS / args.target
+    if not target.exists():
+        sys.exit(f"target not found: {args.target} (put tasks under ./tasks on the host)")
+    name = args.name or re.sub(r"[^A-Za-z0-9_.-]+", "_", target.stem if target.is_file() else target.name)
+    job = JOBS / f"{name}-{time.strftime('%Y%m%d-%H%M%S')}"
+    src = job / "src"
+    src.mkdir(parents=True)
+    (job / ".easyre").mkdir()
+    (job / "agent").mkdir()
+    desc = args.desc or ""
+    if args.desc_file:
+        desc = Path(args.desc_file).read_text(errors="replace")
+    if target.is_dir():
+        for f in sorted(target.iterdir()):
+            if f.is_file() and f.name.lower() in ("task.md", "task.txt", "opis.txt", "opis.md", "readme.md", "readme.txt") and not desc:
+                desc = f.read_text(errors="replace")
+                continue
+            if f.is_dir():
+                shutil.copytree(f, src / f.name)
+            else:
+                extract(f, src)
+    else:
+        extract(target, src)
+    cfg = {"name": name, "target": str(target), "desc": desc.strip(), "success": args.success, "flag_format": args.flag_format,
+           "verify": args.verify, "backend": args.backend, "model": args.model, "mode": args.mode,
+           "budget_min": args.budget_min, "budget_tokens": args.budget_tokens, "created": time.strftime("%F %T"),
+           "elapsed_s": 0, "tokens": 0, "session": None}
+    link_work(job)
+    tri = triage(src)
+    (meta(job) / "triage.md").write_text(tri + "\n")
+    if not cfg["verify"]:
+        cfg["verify"] = auto_verify(src, cfg["success"])
+        if cfg["verify"]:
+            log(f"auto verifier: {cfg['verify']}")
+    (job / "TASK.md").write_text(f"# {name}\n\n{cfg['desc'] or '(no description given)'}\n")
+    jsave(meta(job) / "job.json", cfg)
+    return job, cfg
+
+
+def agent_prompt(cfg, job):
+    tri = (meta(job) / "triage.md").read_text()
+    goal = {"solve": "Solve it, verify the answer with `easyre check '<answer>'`, then write /work/report.md.",
+            "hint": "Solve it privately, verify with `easyre check '<answer>'`, write the graded hints to /work/hints.md, then run `easyre done`.",
+            "tutor": "Phase 1: solve it privately, verify with `easyre check '<answer>'`, write your private notes, then stop. The student conversation starts after that."}[cfg["mode"]]
+    return (f"# Task\n{cfg['desc'] or '(no description given)'}\n\n# Files\nThe handout is in /work/src.\n\n"
+            f"# Triage\n{tri}\n\n{goal}")
+
+
+def finished(cfg):
+    if cfg["mode"] == "tutor":
+        return (meta() / "answer").exists()
+    if cfg["mode"] == "hint":
+        return (meta() / "DONE").exists()
+    return (meta() / "ANSWER").exists()
+
+
+def budget_left(cfg, t0):
+    spent = cfg["elapsed_s"] + (time.time() - t0)
+    if spent > cfg["budget_min"] * 60:
+        return "time"
+    if cfg.get("budget_tokens") and cfg["tokens"] >= cfg["budget_tokens"]:
+        return "tokens"
+    return ""
+
+
+def kill(p):
+    try:
+        os.killpg(p.pid, signal.SIGTERM)
+        time.sleep(3)
+        os.killpg(p.pid, signal.SIGKILL)
+    except OSError:
+        pass
+
+
+def classify(msg):
+    if re.search(r"oauth|invalid api key|/login|unauthori|authenticat|log ?in again|refresh.token", msg, re.I):
+        return "auth"
+    if re.search(r"usage limit|limit reached|rate.?limit|resets? at|try again at|overloaded|429", msg, re.I):
+        return "limit"
+    return "error"
+
+
+def run_cli(cmd, inp, cfg, t0, parse):
+    p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                         cwd=WORK, start_new_session=True)
+    p.stdin.write(inp)
+    p.stdin.close()
+    stop = {"why": ""}
+
+    def watch():
+        while p.poll() is None:
+            why = budget_left(cfg, t0)
+            if why or finished(cfg):
+                if why:
+                    stop["why"] = why
+                    log(f"budget reached ({why}), stopping agent")
+                else:
+                    end = time.time() + 180
+                    while p.poll() is None and time.time() < end:
+                        time.sleep(2)
+                    if p.poll() is not None:
+                        return
+                kill(p)
+                return
+            time.sleep(2)
+
+    threading.Thread(target=watch, daemon=True).start()
+    fail = ""
+    try:
+        fail = read_events(p, cfg, parse)
+    except KeyboardInterrupt:
+        kill(p)
+        raise
+    p.wait()
+    return fail, stop["why"]
+
+
+def read_events(p, cfg, parse):
+    fail = ""
+    with open(meta() / "log.jsonl", "a") as lg:
+        for line in p.stdout:
+            lg.write(line)
+            lg.flush()
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                if line.strip():
+                    activity("", line.rstrip()[:300])
+                continue
+            r = parse(ev, cfg)
+            if r:
+                fail = r
+            jsave(meta() / "job.json", cfg)
+    return fail
+
+
+def parse_claude(ev, cfg):
+    t = ev.get("type", "")
+    if t == "system" and ev.get("subtype") == "init" and not cfg.get("session"):
+        cfg["session"] = ev.get("session_id")
+    if t == "assistant":
+        m = ev.get("message") or {}
+        u = m.get("usage") or {}
+        cfg["tokens"] += int(u.get("output_tokens") or 0)
+        for c in m.get("content") or []:
+            if c.get("type") == "text" and c.get("text", "").strip():
+                activity("agent:", c["text"].strip()[:400])
+            elif c.get("type") == "tool_use":
+                i = c.get("input") or {}
+                activity(f"{c.get('name')}:", str(i.get("command") or i.get("description") or i.get("file_path") or "")[:200])
+    if t == "result":
+        u = ev.get("usage") or {}
+        cfg["tokens"] = cfg.get("_base", 0) + int(u.get("output_tokens") or 0)
+        cfg["cost_usd"] = round(cfg.get("cost_usd", 0) + float(ev.get("total_cost_usd") or 0), 4)
+        cfg["tokens_in"] = cfg.get("tokens_in", 0) + int(u.get("input_tokens") or 0) + int(u.get("cache_creation_input_tokens") or 0)
+        if ev.get("is_error") or ev.get("subtype", "success") != "success":
+            msg = json.dumps(ev)[:600]
+            if ev.get("num_turns") == 0 and cfg.get("session") and not ev.get("total_cost_usd"):
+                cfg["session"] = None
+                log("previous agent session is gone; starting a fresh session (notes and files in /work are kept)")
+                return "lost-session"
+            log("run failed:", msg)
+            return classify(msg)
+    return ""
+
+
+def parse_codex(ev, cfg):
+    t, it = ev.get("type", ""), ev.get("item") or {}
+    if t == "thread.started" and not cfg.get("session"):
+        cfg["session"] = ev.get("thread_id")
+    if t == "turn.completed":
+        u = ev.get("usage") or {}
+        cfg["tokens"] += int(u.get("output_tokens") or 0)
+        cfg["tokens_in"] = cfg.get("tokens_in", 0) + int(u.get("input_tokens") or 0) - int(u.get("cached_input_tokens") or 0)
+    if t == "item.completed" and it.get("type") == "agent_message":
+        activity("agent:", it.get("text", "")[:400])
+    if t == "item.started" and it.get("type") == "command_execution":
+        activity("$", it.get("command", "")[:200])
+    if t in ("turn.failed", "error"):
+        msg = json.dumps(ev)[:600]
+        log("run failed:", msg)
+        return classify(msg)
+    return ""
+
+
+CONTINUE = "You stopped before finishing. Re-read /work/agent/notes.md, pick the most promising unexplored lead, and keep going."
+
+
+def backend_claude(cfg, prompt, t0, extra):
+    base = ["-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions",
+            "--append-system-prompt", (meta() / "instructions.md").read_text()]
+    if cfg.get("model"):
+        base += ["--model", cfg["model"]]
+    base += extra
+    cfg["_base"] = cfg["tokens"]
+    if cfg.get("session"):
+        return run_cli(["claude", "--resume", cfg["session"], *base], CONTINUE, cfg, t0, parse_claude)
+    return run_cli(["claude", *base], prompt, cfg, t0, parse_claude)
+
+
+def backend_codex(cfg, prompt, t0, extra):
+    base = ["--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust", "--json"]
+    if cfg.get("model"):
+        base += ["-m", cfg["model"]]
+    base += extra
+    if cfg.get("session"):
+        return run_cli(["codex", "exec", "resume", *base, cfg["session"], "-"], CONTINUE, cfg, t0, parse_codex)
+    return run_cli(["codex", "exec", *base, "-"], prompt, cfg, t0, parse_codex)
+
+
+TOOLS = [
+    {"type": "function", "function": {"name": "bash", "description": "Run a bash command in /work (Ubuntu, root, RE tools installed). Returns combined stdout/stderr, truncated.",
+     "parameters": {"type": "object", "properties": {"command": {"type": "string"}, "timeout": {"type": "integer", "description": "seconds, default 300"}}, "required": ["command"]}}},
+    {"type": "function", "function": {"name": "read_file", "description": "Read a text file (optionally a line range).",
+     "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "start": {"type": "integer"}, "end": {"type": "integer"}}, "required": ["path"]}}},
+    {"type": "function", "function": {"name": "write_file", "description": "Write a text file (overwrites).",
+     "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}},
+    {"type": "function", "function": {"name": "read_skill", "description": "Read a skill playbook by name. Available skills are listed in your instructions.",
+     "parameters": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}}},
+]
+MAX_OUT = int(os.environ.get("EASYRE_TOOL_OUTPUT", "12000"))
+
+
+def clip(s):
+    return s if len(s) <= MAX_OUT else s[: MAX_OUT // 2] + f"\n... [{len(s) - MAX_OUT} chars cut] ...\n" + s[-MAX_OUT // 2:]
+
+
+def tool_call(name, a):
+    try:
+        if name == "bash":
+            r = subprocess.run(["bash", "-lc", a["command"]], cwd=WORK, capture_output=True, text=True,
+                               timeout=int(a.get("timeout") or 300), errors="replace")
+            return clip(f"exit={r.returncode}\n{r.stdout}{r.stderr}")
+        if name == "read_file":
+            lines = Path(a["path"]).read_text(errors="replace").splitlines()
+            s, e = int(a.get("start") or 1), int(a.get("end") or len(lines))
+            return clip("\n".join(f"{i}\t{l}" for i, l in enumerate(lines[s - 1:e], s)))
+        if name == "write_file":
+            p = Path(a["path"])
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(a["content"])
+            return f"wrote {len(a['content'])} chars to {p}"
+        if name == "read_skill":
+            p = SKILLS / re.sub(r"[^a-z0-9-]", "", a["name"]) / "SKILL.md"
+            return clip(p.read_text()) if p.exists() else "no such skill"
+    except subprocess.TimeoutExpired:
+        return "timeout: command killed (run long jobs in the background with nohup and poll a log file)"
+    except Exception as e:
+        return f"error: {e!r}"
+    return "unknown tool"
+
+
+def chat(msgs, cfg):
+    base = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+    body = {"model": cfg.get("model") or os.environ.get("OPENAI_MODEL", "gpt-4.1"), "messages": msgs, "tools": TOOLS}
+    req = urllib.request.Request(base + "/chat/completions", data=json.dumps(body).encode(), method="POST",
+                                 headers={"Content-Type": "application/json", "Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY', 'none')}"})
+    with urllib.request.urlopen(req, timeout=600) as r:
+        return json.loads(r.read())
+
+
+def backend_openai(cfg, prompt, t0, extra):
+    hist = meta() / "openai_history.json"
+    msgs = jload(hist) or [{"role": "system", "content": (meta() / "instructions.md").read_text()}, {"role": "user", "content": prompt}]
+    if msgs[-1]["role"] == "assistant":
+        msgs.append({"role": "user", "content": CONTINUE})
+    idle = 0
+    while not finished(cfg):
+        why = budget_left(cfg, t0)
+        if why:
+            return "", why
+        try:
+            resp = chat(msgs, cfg)
+        except Exception as e:
+            msg = str(e) + (e.read().decode(errors="replace")[:400] if hasattr(e, "read") else "")
+            log("api error:", msg[:300])
+            return classify(msg), ""
+        u = resp.get("usage") or {}
+        cfg["tokens"] += int(u.get("completion_tokens") or 0)
+        cfg["tokens_in"] = cfg.get("tokens_in", 0) + int(u.get("prompt_tokens") or 0)
+        m = resp["choices"][0]["message"]
+        msgs.append({k: v for k, v in m.items() if k in ("role", "content", "tool_calls")})
+        if m.get("content"):
+            activity("agent:", str(m["content"]).strip()[:400])
+        calls = m.get("tool_calls") or []
+        for c in calls:
+            try:
+                a = json.loads(c["function"].get("arguments") or "{}")
+            except ValueError:
+                a = {}
+            activity(f"{c['function']['name']}:", str(a.get("command") or a.get("path") or a.get("name") or "")[:200])
+            msgs.append({"role": "tool", "tool_call_id": c["id"], "content": tool_call(c["function"]["name"], a)})
+        if not calls:
+            idle += 1
+            if idle > 2:
+                return "", ""
+            msgs.append({"role": "user", "content": "Not finished yet. " + CONTINUE + " Use the tools."})
+        else:
+            idle = 0
+        jsave(hist, msgs)
+        with open(meta() / "log.jsonl", "a") as lg:
+            lg.write(json.dumps({"usage": u, "calls": len(calls)}) + "\n")
+        jsave(meta() / "job.json", cfg)
+    return "", ""
+
+
+BACKENDS = {"claude": backend_claude, "codex": backend_codex, "openai": backend_openai}
+
+
+def load_profiles():
+    f = CONF / "backends.toml"
+    if not f.exists():
+        return {}
+    try:
+        return tomllib.loads(f.read_text())
+    except tomllib.TOMLDecodeError as e:
+        sys.exit(f"config/backends.toml: {e}")
+
+
+def apply_profile(cfg):
+    name = cfg.get("profile")
+    if not name:
+        return
+    p = (load_profiles().get("profiles") or {}).get(name)
+    if p is None:
+        sys.exit(f"unknown profile {name!r}; see `easyre profiles`")
+    if p.get("base_url"):
+        os.environ["OPENAI_BASE_URL"] = p["base_url"]
+    key = os.environ.get(p["api_key_env"], "") if p.get("api_key_env") else p.get("api_key", "")
+    if p.get("api_key_env") and not key:
+        sys.exit(f"profile {name}: set {p['api_key_env']} in .env")
+    if key:
+        os.environ["OPENAI_API_KEY"] = key
+    for k, v in (p.get("env") or {}).items():
+        os.environ[k] = str(v)
+
+
+def resolve_profile(args, cmd):
+    data = load_profiles()
+    profs = data.get("profiles") or {}
+    name = args.profile or (None if cmd == "resume" or args.backend else os.environ.get("EASYRE_PROFILE") or data.get("default"))
+    if not name:
+        return None
+    if name not in profs:
+        sys.exit(f"unknown profile {name!r}; available: {', '.join(profs) or 'none'}")
+    p = profs[name]
+    if args.backend is None:
+        args.backend = p.get("backend", "claude")
+    if args.model is None:
+        own = name == os.environ.get("EASYRE_PROFILE")
+        args.model = (os.environ.get("EASYRE_MODEL") if own else None) or p.get("model")
+    return name
+
+
+def profiles(_):
+    data = load_profiles()
+    profs = data.get("profiles") or {}
+    if not profs:
+        print("no profiles; add them to config/backends.toml")
+        return 0
+    d = os.environ.get("EASYRE_PROFILE") or data.get("default")
+    for n, p in profs.items():
+        where = p.get("base_url", "")
+        m = p.get("model") or ""
+        if n == d and os.environ.get("EASYRE_MODEL"):
+            m = f"{os.environ['EASYRE_MODEL']} (EASYRE_MODEL)"
+        print(f"{'*' if n == d else ' '} {n:24} {p.get('backend', 'claude'):7} {m:32} {where}")
+    print("\n* = default. Use: easyre run TASK --profile NAME")
+    return 0
+
+
+def setup_backend(cfg):
+    b = cfg["backend"]
+    if b == "claude" and not (os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY")):
+        sys.exit("claude backend: set CLAUDE_CODE_OAUTH_TOKEN in .env (easyre login claude)")
+    if b == "claude":
+        keep = STATE / "claude-projects"
+        keep.mkdir(parents=True, exist_ok=True)
+        proj = Path.home() / ".claude" / "projects"
+        if not proj.is_symlink():
+            if proj.is_dir():
+                for x in proj.iterdir():
+                    if not (keep / x.name).exists():
+                        shutil.move(str(x), keep / x.name)
+                shutil.rmtree(proj, ignore_errors=True)
+            proj.parent.mkdir(parents=True, exist_ok=True)
+            proj.symlink_to(keep, target_is_directory=True)
+    if b == "codex":
+        home = Path(os.environ.get("CODEX_HOME", STATE / "codex"))
+        home.mkdir(parents=True, exist_ok=True)
+        for f in ("config.toml", "hooks.json"):
+            shutil.copy(CONF / f"codex-{f}", home / f)
+        if not (home / "auth.json").exists() and not os.environ.get("OPENAI_API_KEY"):
+            sys.exit("codex backend: run `easyre login codex` or set OPENAI_API_KEY in .env")
+    if b == "openai" and not os.environ.get("OPENAI_BASE_URL") and not os.environ.get("OPENAI_API_KEY"):
+        sys.exit("openai backend: set OPENAI_BASE_URL (and OPENAI_API_KEY) in .env")
+
+
+def drive(job, cfg, interactive=False):
+    link_work(job)
+    apply_profile(cfg)
+    QUIET["on"] = cfg["mode"] in ("hint", "tutor") and not os.environ.get("EASYRE_VERBOSE")
+    setup_backend(cfg)
+    ins = instructions(cfg)
+    m = meta(job)
+    m.mkdir(exist_ok=True)
+    (job / "agent").mkdir(exist_ok=True)
+    (m / "instructions.md").write_text(ins)
+    if cfg["backend"] == "codex":
+        (Path(os.environ.get("CODEX_HOME", STATE / "codex")) / "AGENTS.md").write_text(ins)
+    (m / "stops").unlink(missing_ok=True)
+    (m / "start").write_text(str(time.time()))
+    prompt = agent_prompt(cfg, job)
+    extra = []
+    if interactive:
+        if cfg["backend"] == "claude":
+            c = ["claude", "--dangerously-skip-permissions", "--append-system-prompt", ins] + (["--model", cfg["model"]] if cfg.get("model") else [])
+            c += ["--resume", cfg["session"]] if cfg.get("session") else [prompt]
+        elif cfg["backend"] == "codex":
+            c = ["codex", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust"] + (["-m", cfg["model"]] if cfg.get("model") else [])
+            c = (["codex", "resume", *c[1:], cfg["session"]] if cfg.get("session") else c + [prompt])
+        else:
+            sys.exit("-i works with claude and codex backends")
+        os.chdir(WORK)
+        subprocess.run(c)
+        return report(job, cfg, "interactive session ended")
+    t0 = time.time()
+    log("agent started; first output can take a minute. Ctrl+C stops and keeps the job resumable.")
+    try:
+        why = loop(job, cfg, prompt, t0, extra)
+    except KeyboardInterrupt:
+        why = "stopped by user"
+        log(f"stopped. Continue later with: easyre resume {job.name}")
+    cfg["elapsed_s"] += int(time.time() - t0)
+    jsave(meta(job) / "job.json", cfg)
+    rc = report(job, cfg, why)
+    if cfg["mode"] == "tutor" and (meta(job) / "answer").exists():
+        return tutor_chat(job, cfg)
+    return rc
+
+
+TUTOR_HELP = """Tutor chat. Write what you did and what you see; ask anything.
+  /hint     ask for a nudge
+  /answer   reveal the answer
+  /quit     leave (continue later with: easyre tutor JOB)"""
+
+
+def redact(text, ans):
+    return text.replace(ans, "[hidden]") if ans and len(ans) >= 3 else text
+
+
+def tutor_turn_cli(cmd, inp, cfg, parse):
+    try:
+        p = subprocess.run(cmd, input=inp, cwd=WORK, capture_output=True, text=True, timeout=1800, errors="replace")
+    except subprocess.TimeoutExpired:
+        return "(the tutor took too long; try again)"
+    text = ""
+    with open(meta() / "log.jsonl", "a") as lg:
+        for line in p.stdout.splitlines():
+            lg.write(line + "\n")
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            parse(ev, cfg)
+            if ev.get("type") == "result" and isinstance(ev.get("result"), str):
+                text = ev["result"]
+            it = ev.get("item") or {}
+            if ev.get("type") == "item.completed" and it.get("type") == "agent_message":
+                text = it.get("text", "")
+    jsave(meta() / "job.json", cfg)
+    return text.strip() or "(no reply)"
+
+
+def tutor_turn(cfg, msg):
+    b = cfg["backend"]
+    if b == "claude":
+        cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions",
+               "--append-system-prompt", (meta() / "instructions.md").read_text()]
+        if cfg.get("model"):
+            cmd += ["--model", cfg["model"]]
+        if cfg.get("session"):
+            cmd += ["--resume", cfg["session"]]
+        cfg["_base"] = cfg["tokens"]
+        return tutor_turn_cli(cmd, msg, cfg, parse_claude)
+    if b == "codex":
+        base = ["--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust", "--json"]
+        if cfg.get("model"):
+            base += ["-m", cfg["model"]]
+        cmd = ["codex", "exec", "resume", *base, cfg["session"], "-"] if cfg.get("session") else ["codex", "exec", *base, "-"]
+        return tutor_turn_cli(cmd, msg, cfg, parse_codex)
+    hist = meta() / "openai_history.json"
+    msgs = jload(hist) or [{"role": "system", "content": (meta() / "instructions.md").read_text()}]
+    msgs.append({"role": "user", "content": msg})
+    for _ in range(25):
+        resp = chat(msgs, cfg)
+        u = resp.get("usage") or {}
+        cfg["tokens"] += int(u.get("completion_tokens") or 0)
+        m = resp["choices"][0]["message"]
+        msgs.append({k: v for k, v in m.items() if k in ("role", "content", "tool_calls")})
+        calls = m.get("tool_calls") or []
+        if not calls:
+            jsave(hist, msgs)
+            jsave(meta() / "job.json", cfg)
+            return str(m.get("content") or "").strip()
+        for c in calls:
+            try:
+                a = json.loads(c["function"].get("arguments") or "{}")
+            except ValueError:
+                a = {}
+            msgs.append({"role": "tool", "tool_call_id": c["id"], "content": tool_call(c["function"]["name"], a)})
+    jsave(hist, msgs)
+    return "(the tutor got stuck; try rephrasing)"
+
+
+def tutor_chat(job, cfg):
+    link_work(job)
+    ans = (meta(job) / "answer").read_text().strip()
+    log_md = job / "tutor.md"
+    if not log_md.exists():
+        log_md.write_text(f"# Tutor session: {cfg['name']}\n\n")
+    print("\n" + TUTOR_HELP + "\n")
+    first = not cfg.get("tutor_started")
+    if first:
+        cfg["tutor_started"] = True
+        jsave(meta(job) / "job.json", cfg)
+        msg = "[TUTOR PHASE START] Greet the student in 2-3 sentences: say what kind of target this is (no spoilers) and ask what they have tried so far."
+        reply = redact(tutor_turn(cfg, msg), ans)
+        print(f"\ntutor> {reply}\n")
+        with open(log_md, "a") as o:
+            o.write(f"**Tutor:** {reply}\n\n")
+    while True:
+        try:
+            user = input("you> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+        if not user:
+            continue
+        if user in ("/quit", "/exit", "/q"):
+            break
+        if user == "/answer":
+            if input("Reveal the answer? [y/N] ").strip().lower() == "y":
+                print(f"\nAnswer: {ans}\n")
+                with open(log_md, "a") as o:
+                    o.write(f"**Answer revealed:** `{ans}`\n\n")
+            continue
+        if user == "/help":
+            print(TUTOR_HELP)
+            continue
+        msg = ("[STUDENT] The student asks for a nudge: give the next small step from where they are."
+               if user == "/hint" else f"[STUDENT] {user}")
+        print("(tutor is thinking...)")
+        reply = redact(tutor_turn(cfg, msg), ans)
+        print(f"\ntutor> {reply}\n")
+        with open(log_md, "a") as o:
+            o.write(f"**You:** {user}\n\n**Tutor:** {reply}\n\n")
+    print(f"Conversation saved to {job.name}/tutor.md. Continue later with: easyre tutor {job.name}")
+    return 0
+
+
+def tutor(argv):
+    if not argv:
+        sys.exit("usage: easyre tutor JOB")
+    job = find_job(argv[0])
+    cfg = jload(meta(job) / "job.json")
+    if cfg.get("mode") != "tutor":
+        sys.exit(f"{job.name} was not started in tutor mode. Start one with: easyre run TASK --mode tutor")
+    apply_profile(cfg)
+    setup_backend(cfg)
+    link_work(job)
+    if not (meta(job) / "answer").exists():
+        return drive(job, cfg)
+    return tutor_chat(job, cfg)
+
+
+def loop(job, cfg, prompt, t0, extra):
+    why, resumes = "", int(os.environ.get("EASYRE_RESUMES", "12"))
+    for n in range(resumes + 1):
+        fail, why = BACKENDS[cfg["backend"]](cfg, prompt, t0, extra)
+        jsave(meta(job) / "job.json", cfg)
+        if finished(cfg) or why:
+            break
+        if fail == "auth":
+            why = "backend authentication failed"
+            break
+        pause = 900 if fail == "limit" else 1 if fail == "lost-session" else 30 if fail else 5
+        if cfg["backend"] != "openai" and not cfg.get("session") and fail != "lost-session":
+            pause = max(pause, 30)
+        log(f"agent stopped without finishing ({fail or 'no answer'}); retry {n + 1}/{resumes} in {pause}s")
+        time.sleep(pause)
+        if budget_left(cfg, t0):
+            why = budget_left(cfg, t0)
+            break
+    return why
+
+
+def report(job, cfg, why):
+    m = meta(job)
+    ans = (m / "ANSWER").read_text().strip() if (m / "ANSWER").exists() else ""
+    status = "solved" if ans else f"not solved ({why or 'agent gave up'})"
+    if cfg["mode"] == "hint":
+        status = "hints ready" if (m / "DONE").exists() else status
+    if cfg["mode"] == "tutor":
+        status = "tutor ready" if (m / "answer").exists() else status
+    head = [f"# {cfg['name']} - EasyRE report", "",
+            f"- Status: **{status}**",
+            f"- Backend: {cfg['backend']} {cfg.get('model') or ''}", f"- Mode: {cfg['mode']}",
+            f"- Time: {cfg['elapsed_s'] // 60} min {cfg['elapsed_s'] % 60} s",
+            f"- Tokens: {cfg['tokens']} out / {cfg.get('tokens_in', 0)} in (uncached)"]
+    if cfg.get("cost_usd"):
+        head.append(f"- API-equivalent cost: ${cfg['cost_usd']:.2f} (on a subscription you pay nothing extra)")
+    if cfg["mode"] == "solve" and ans:
+        head.append(f"- Answer: `{ans}` ({(m / 'CHECK').read_text().strip() if (m / 'CHECK').exists() else 'unchecked'})")
+    if cfg["mode"] == "hint":
+        head.append("- Answer hidden. Step through hints with `easyre hint " + job.name + "`; the answer is in `.answer`.")
+    body = (job / "report.md").read_text() if (job / "report.md").exists() else ""
+    if body.startswith("# " + cfg["name"] + " - EasyRE report"):
+        body = body.split("\n---\n", 1)[-1]
+    if cfg["mode"] == "tutor":
+        body = f"Chat with the tutor: `easyre tutor {job.name}`. The conversation is saved in `tutor.md`. Agent notes (`agent/notes.md`, `.easyre/`) contain the solution: avoid them until you are done.\n"
+    elif cfg["mode"] == "hint":
+        body = "Hints are in `hints.md`. Agent notes (`notes.md`, `log.jsonl`) contain the solution: avoid them until you are done.\n"
+    elif not body.strip() and (job / "agent" / "notes.md").exists():
+        body = "## Agent notes\n\n" + (job / "agent" / "notes.md").read_text()
+    (job / "report.md").write_text("\n".join(head) + "\n\n---\n" + body)
+    log(f"{status} -> {job}/report.md")
+    print(job / "report.md")
+    return 0 if ans or (m / "DONE").exists() else 1
+
+
+def verify(cfg, cand):
+    fmt, cmd, ok = cfg.get("flag_format"), cfg.get("verify"), cfg.get("success")
+    if fmt and not re.fullmatch(fmt, cand):
+        return "bad-format", f"does not match {fmt}"
+    if not cmd:
+        return "unverified", "no verifier configured; accepted on your evidence"
+    run = cmd.replace("{}", subprocess.list2cmdline([cand])) if "{}" in cmd else cmd
+    try:
+        r = subprocess.run(["bash", "-lc", run], cwd=WORK, input=None if "{}" in cmd else cand + "\n",
+                           capture_output=True, text=True, timeout=120, errors="replace")
+        out = r.stdout + r.stderr
+    except subprocess.TimeoutExpired as e:
+        out, r = (e.stdout or "") if isinstance(e.stdout, str) else "", None
+    good = bool(re.search(ok, out)) if ok else (r is not None and r.returncode == 0)
+    return ("correct" if good else "incorrect"), out.strip()[-800:]
+
+
+def check(argv):
+    if not argv:
+        sys.exit("usage: easyre check '<answer>'")
+    cand = argv[-1]
+    cfg = jload(meta() / "job.json") or {}
+    status, detail = verify(cfg, cand)
+    with open(meta() / "attempts.log", "a") as o:
+        o.write(f"{time.strftime('%H:%M:%S')} {status} {cand}\n")
+    print(status)
+    if detail:
+        print(detail)
+    if status in ("correct", "unverified"):
+        if cfg.get("mode") == "tutor":
+            (meta() / "answer").write_text(cand + "\n")
+            print("-> Answer saved privately. Write your private notes to /work/agent/notes.md, then stop. Do not reveal the answer.")
+        elif cfg.get("mode") == "hint":
+            (meta() / "answer").write_text(cand + "\n")
+            print("-> Answer saved privately. Now write /work/hints.md and run `easyre done`. Never print the answer in hints.md.")
+        else:
+            (meta() / "ANSWER").write_text(cand + "\n")
+            (meta() / "CHECK").write_text(status + "\n")
+            print("-> Write /work/report.md now, then stop.")
+        return 0
+    return 1
+
+
+def done(_):
+    h = WORK / "hints.md"
+    if not (meta() / "answer").exists():
+        print("no verified answer yet: run `easyre check '<answer>'` first")
+        return 1
+    if not h.exists() or len(re.findall(r"^## ", h.read_text(), re.M)) < 2:
+        print("/work/hints.md needs at least 2 sections starting with '## '")
+        return 1
+    ans = (meta() / "answer").read_text().strip()
+    if ans and ans in h.read_text():
+        print("hints.md contains the answer; remove it")
+        return 1
+    (meta() / "DONE").write_text("1\n")
+    print("done. Stop now.")
+    return 0
+
+
+def find_job(key):
+    p = Path(key)
+    if p.is_dir():
+        return migrate(p.resolve())
+    c = [d for d in sorted(JOBS.glob(f"{key}*")) if d.is_dir()]
+    if not c:
+        sys.exit(f"no job {key!r}; see `easyre jobs`")
+    return migrate(c[-1])
+
+
+def hint(argv):
+    job = find_job(argv[0])
+    h = job / "hints.md"
+    if not h.exists():
+        sys.exit("no hints.md in this job")
+    parts = re.split(r"(?m)^(?=## )", h.read_text())
+    intro, secs = (parts[0], parts[1:]) if not parts[0].startswith("## ") else ("", parts)
+    hi = meta(job) / "hint_idx"
+    idx = int(hi.read_text()) if hi.exists() else 0
+    if "--reset" in argv:
+        idx = 0
+    if idx == 0 and intro.strip():
+        print(intro.strip() + "\n")
+    if idx >= len(secs):
+        print("No more hints.")
+        if "--answer" in argv:
+            a = meta(job) / "answer"
+            print("Answer:", (a if a.exists() else job / ".answer").read_text().strip())
+        else:
+            print("To reveal the answer: easyre hint", job.name, "--answer")
+        return 0
+    print(secs[idx].strip())
+    print(f"\n[hint {idx + 1}/{len(secs)}] next: easyre hint {job.name}")
+    hi.write_text(str(idx + 1))
+    return 0
+
+
+def job_status(d):
+    m = meta(d)
+    if (m / "ANSWER").exists():
+        return "solved"
+    if (m / "DONE").exists():
+        return "hints"
+    if (m / "answer").exists() and (jload(m / "job.json") or {}).get("mode") == "tutor":
+        return "tutor"
+    return "closed" if (m / "CLOSED").exists() else "open"
+
+
+def all_jobs():
+    return sorted({migrate(p.parent.parent if p.parent.name == ".easyre" else p.parent)
+                   for p in list(JOBS.glob("*/job.json")) + list(JOBS.glob("*/.easyre/job.json"))})
+
+
+def jobs(_):
+    js = all_jobs()
+    if not js:
+        print("no jobs yet. Start one: easyre run <task>")
+        return 0
+    print(f"{'JOB':45} {'STATUS':7} {'BACKEND':7} {'MODE':5} {'TIME':>6} {'TOKENS':>13}")
+    for d in js:
+        c = jload(meta(d) / "job.json") or {}
+        st = job_status(d)
+        e = int(c.get("elapsed_s", 0))
+        print(f"{d.name:45} {st:7} {c.get('backend', ''):7} {c.get('mode', ''):5} {e // 60:>3}:{e % 60:02d} {c.get('tokens', 0):>9} tok")
+    return 0
+
+
+def close(argv):
+    if not argv:
+        sys.exit("usage: easyre close JOB")
+    job = find_job(argv[0])
+    (meta(job) / "CLOSED").write_text(time.strftime("%F %T") + "\n")
+    print(f"closed {job.name} (easyre resume reopens it)")
+    return 0
+
+
+def remove(argv):
+    names = [a for a in argv if not a.startswith("-")]
+    groups = {"--open": {"open"}, "--closed": {"closed"}, "--unsolved": {"open", "closed"},
+              "--solved": {"solved", "hints"}, "--all": {"open", "closed", "solved", "hints"}}
+    wanted = set().union(*[groups[a] for a in argv if a in groups])
+    unknown = [a for a in argv if a.startswith("-") and a not in groups and a != "-y"]
+    if unknown or not (wanted or names):
+        sys.exit("usage: easyre rm JOB [JOB...] | easyre rm --open|--closed|--unsolved|--solved|--all [-y]")
+    targets = [find_job(n) for n in names]
+    targets += [d for d in all_jobs() if job_status(d) in wanted and d not in targets]
+    if not targets:
+        print("nothing to remove")
+        return 0
+    for t in targets:
+        print(" ", t.name)
+    if "-y" not in argv:
+        if input(f"Delete {len(targets)} job folder(s) permanently? [y/N] ").strip().lower() != "y":
+            print("cancelled")
+            return 1
+    for t in targets:
+        if WORK.is_symlink() and WORK.resolve() == t.resolve():
+            WORK.unlink()
+        shutil.rmtree(t)
+    print(f"deleted {len(targets)}")
+    return 0
+
+
+def doctor(argv):
+    ok = True
+
+    def line(good, what, hint=""):
+        nonlocal ok
+        ok = ok and good
+        print(f"  {'OK ' if good else 'ERR'}  {what}" + (f"\n       -> {hint}" if hint and not good else ""))
+
+    print("EasyRE doctor\n")
+    data = load_profiles()
+    profs = data.get("profiles") or {}
+    name = os.environ.get("EASYRE_PROFILE") or data.get("default")
+    p = profs.get(name) if name else None
+    line(p is not None, f"profile: {name or '-'}", "set EASYRE_PROFILE in .env to one of: " + ", ".join(profs))
+    if p is None:
+        return 1
+    backend = p.get("backend", "claude")
+    model = os.environ.get("EASYRE_MODEL") or p.get("model") or "(backend default)"
+    print(f"       backend={backend} model={model}")
+    cfg = {"profile": name}
+    try:
+        apply_profile(cfg)
+    except SystemExit as e:
+        line(False, "profile credentials", str(e))
+        return 1
+    if backend == "claude":
+        has = bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY"))
+        line(has, "Claude credentials", "run setup again, or `easyre login claude` and paste the token into .env")
+        line(bool(shutil.which("claude")), "Claude Code installed", "rebuild the image: docker compose build")
+    elif backend == "codex":
+        auth = (STATE / "codex" / "auth.json").exists() or bool(os.environ.get("OPENAI_API_KEY"))
+        line(auth, "Codex login", "run `easyre login codex`")
+        line(bool(shutil.which("codex")), "Codex CLI installed", "rebuild the image: docker compose build")
+    else:
+        base = os.environ.get("OPENAI_BASE_URL", "").rstrip("/")
+        line(bool(base), f"API endpoint: {base or '-'}", "set base_url in the profile")
+        if base:
+            try:
+                req = urllib.request.Request(base + "/models", headers={"Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY', 'none')}"})
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    ids = [m.get("id") for m in (json.loads(resp.read()).get("data") or [])]
+                line(True, "API reachable")
+                if ids and p.get("model") and model not in ids:
+                    line(False, f"model {model} available", "available: " + ", ".join(ids[:15]))
+            except Exception as e:
+                hint = "is the server running? For Ollama/LM Studio on this PC use host.docker.internal" if "localhost" not in base else "use host.docker.internal instead of localhost"
+                line(False, f"API reachable ({e.__class__.__name__}: {str(e)[:80]})", hint)
+    line(bool(shutil.which("wine")), "Wine (runs .exe targets)", "check toolchain/install.sh and rebuild")
+    names = skill_names()
+    todo = [n for n in names if "TODO" in (SKILLS / n / "SKILL.md").read_text()]
+    print(f"  ---  skills: {len(names)} installed, {len(names) - len(todo)} filled in, {len(todo)} still TODO")
+    tasks = [t.name for t in TASKS.iterdir() if not t.name.startswith(".")] if TASKS.is_dir() else []
+    print(f"  ---  tasks folder: {len(tasks)} item(s)" + (f": {', '.join(tasks[:8])}" if tasks else " (put a crackme into ./tasks)"))
+    print("\nAll good. Try: easyre run <task> --success \"<success text>\"" if ok else "\nFix the ERR lines above.")
+    return 0 if ok else 1
+
+
+def login(argv):
+    what = argv[0] if argv else ""
+    if what == "claude":
+        print("Log in with your Claude subscription. Copy the sk-ant-oat... token into .env as CLAUDE_CODE_OAUTH_TOKEN=...")
+        return subprocess.run(["claude", "setup-token"]).returncode
+    if what == "codex":
+        home = STATE / "codex"
+        home.mkdir(parents=True, exist_ok=True)
+        return subprocess.run(["codex", "login", "--device-auth"], env={**os.environ, "CODEX_HOME": str(home)}).returncode
+    sys.exit("usage: easyre login claude|codex")
+
+
+def opts(p):
+    p.add_argument("--desc")
+    p.add_argument("--desc-file")
+    p.add_argument("--success")
+    p.add_argument("--flag-format")
+    p.add_argument("--verify")
+    p.add_argument("--profile")
+    p.add_argument("--backend", choices=list(BACKENDS))
+    p.add_argument("--model")
+    p.add_argument("--mode", choices=["solve", "hint", "tutor"])
+    p.add_argument("--budget-min", type=float)
+    p.add_argument("--budget-tokens", type=int)
+    p.add_argument("--name")
+    p.add_argument("-i", action="store_true")
+    p.add_argument("--force", action="store_true")
+
+
+def main():
+    a = sys.argv[1:]
+    if not a or a[0] in ("-h", "--help", "help"):
+        print(__doc__)
+        return 0
+    cmd, rest = a[0], a[1:]
+    simple = {"check": check, "done": done, "hint": hint, "jobs": jobs, "login": login, "profiles": profiles, "close": close, "rm": remove, "doctor": doctor, "tutor": tutor}
+    if cmd in simple:
+        return simple[cmd](rest)
+    if cmd not in ("run", "resume"):
+        print(__doc__)
+        return 2
+    p = argparse.ArgumentParser(prog=f"easyre {cmd}")
+    p.add_argument("target" if cmd == "run" else "job")
+    opts(p)
+    args = p.parse_args(rest)
+    prof = resolve_profile(args, cmd)
+    if cmd == "run":
+        for k, v in {"backend": os.environ.get("EASYRE_BACKEND", "claude"), "mode": "solve",
+                     "budget_min": float(os.environ.get("EASYRE_BUDGET_MIN", "120"))}.items():
+            if getattr(args, k) is None:
+                setattr(args, k, v)
+        if args.model is None:
+            args.model = os.environ.get("EASYRE_MODEL") or ({"claude": "opus"}.get(args.backend))
+        job, cfg = prepare(args)
+        cfg["profile"] = prof
+        jsave(meta(job) / "job.json", cfg)
+    else:
+        job = find_job(args.job)
+        if job_status(job) in ("solved", "hints") and "--force" not in rest:
+            print(f"{job.name} is already {job_status(job)}. See {job.name}/report.md, or add --force to run the agent again.")
+            return 0
+        for f in ("CLOSED",) + (("ANSWER", "CHECK", "DONE") if args.force else ()):
+            (meta(job) / f).unlink(missing_ok=True)
+        cfg = jload(meta(job) / "job.json")
+        for k in ("desc", "success", "flag_format", "verify", "backend", "model", "mode", "budget_min", "budget_tokens"):
+            if getattr(args, k, None) is not None:
+                cfg[k] = getattr(args, k)
+        if prof:
+            cfg["profile"] = prof
+        elif args.backend:
+            cfg["profile"] = None
+        if args.backend and args.backend != jload(meta(job) / "job.json").get("backend"):
+            cfg["session"] = None
+        jsave(meta(job) / "job.json", cfg)
+    log(f"job {job.name}: profile={cfg.get('profile') or '-'} backend={cfg['backend']} model={cfg.get('model')} mode={cfg['mode']} budget={cfg['budget_min']} min")
+    return drive(job, cfg, args.i)
+
+
+if __name__ == "__main__":
+    sys.exit(main() or 0)
