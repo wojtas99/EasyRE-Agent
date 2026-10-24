@@ -1,22 +1,58 @@
 ---
 name: ghidra-headless
-description: Using Ghidra without the GUI (headless scripts or MCP) from the agent.
+description: Drive Ghidra without the GUI to decompile native binaries in batch. Load when you need decompiled C, a function list, or a custom analysis script on a PE/ELF target. Requires the ghidra toolchain module.
 ---
 
 # ghidra-headless
 
 ## When to use
 
-TODO
+You want readable decompiled C for a native binary and the lightweight tools (`objdump`, `r2`) are not enough. Requires the `ghidra` module (`which analyzeHeadless`); if it is missing, install it with `/opt/easyre/toolchain/modules/ghidra.sh`.
 
 ## Steps
 
-TODO
+1. **Check for prefetch output first.** If triage started the prefetch hook, the analysis is already running or done in `/work/agent/prefetch/`:
+   - `decompiled.c` — every function decompiled;
+   - `functions.txt` — address, size, name;
+   - `strings.txt`, `imports.txt`.
+   `tail -f /work/agent/prefetch/prefetch.log` to see if it is still going. Do not start a second analysis of the same file.
+2. **Grep the decompilation** for the lead you got from triage/strings (the success message, the compare function) and read outward from there.
+3. **Only if you need more** (a custom pass, a different binary, scripted extraction) run headless yourself with a post-script.
 
 ## Tools and commands
 
-TODO
+Run a one-off analysis and dump with the shipped script:
+
+```sh
+prefetch /work/src/target.exe /work/agent/gh
+# or directly:
+analyzeHeadless /tmp/proj gh -import /work/src/target.exe \
+  -scriptPath /opt/easyre/tools/ghidra_scripts \
+  -postScript PrefetchDump.py /work/agent/gh -deleteProject
+```
+
+Write your own post-script (Jython 2.7 API) to `/work/agent/*.py` and pass it with `-postScript`. Useful calls:
+
+```python
+# currentProgram is provided. Decompile one function:
+from ghidra.app.decompiler import DecompInterface
+d = DecompInterface(); d.openProgram(currentProgram)
+fn = getFunction("check")                      # or getFunctionContaining(toAddr(0x401000))
+print(d.decompileFunction(fn, 60, monitor).getDecompiledFunction().getC())
+# Read bytes / defined data:
+getBytes(toAddr(0x402000), 16)
+getDataAt(toAddr(0x403000)).getValue()
+```
+
+Pass arguments to your script with `getScriptArgs()` and reach them after `-postScript Name.py arg1 arg2`.
 
 ## Pitfalls
 
-TODO
+- Ghidra scripts are **Jython 2.7**, not Python 3: `print x` works, `unicode` exists, no f-strings in older trees — keep scripts simple and `str()`-based.
+- Headless import of a large binary is slow (minutes). Analyze once, write results to `agent/`, then read files — do not re-run per question.
+- The decompiler guesses calling conventions and types; when the C looks nonsensical, drop to the Listing/disassembly for that function.
+- Use `-deleteProject` (or a temp project dir) so repeated runs do not collide on a locked project.
+
+## Verification
+
+- Cross-check a surprising decompiled constant against the raw bytes (`getBytes`, or `xxd` on the file at that offset) before trusting it in a solver.

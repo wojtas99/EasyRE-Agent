@@ -291,18 +291,18 @@ Skills are Markdown playbooks in `skills/<name>/SKILL.md`. The agent sees the li
 
 | | Skill | Covers | Status |
 |---|---|---|---|
-| 🧭 | `re-methodology` | General approach: orient, find the check, extract, solve, verify | 🚧 |
-| ⚙️ | `native-binaries` | PE / ELF: C, C++, Go, Rust | 🚧 |
-| 🟪 | `dotnet` | .NET and Unity | 🚧 |
-| 🐍 | `python-targets` | Packaged Python apps and bytecode | 🚧 |
-| ☕ | `jvm-android` | JAR and APK | 🚧 |
-| 🌐 | `javascript-electron` | JS, Node, Electron | 🚧 |
-| 🎰 | `custom-vm` | Custom VMs and bytecode interpreters | 🚧 |
-| 🍷 | `dynamic-wine` | Running and observing Windows programs under Wine | 🚧 |
-| 🧮 | `solvers` | Constraint solving, symbolic execution, emulation | 🚧 |
-| 🔐 | `crypto-id` | Recognizing crypto and encoding primitives | 🚧 |
-| 🗂️ | `formats-forensics` | Documents, archives, images, captures, custom formats | 🚧 |
-| 🐉 | `ghidra-headless` | Ghidra without the GUI (headless / MCP) | 🚧 |
+| 🧭 | `re-methodology` | General approach: orient, find the check, extract, solve, verify | ✅ |
+| ⚙️ | `native-binaries` | PE / ELF: C, C++, Go, Rust, Delphi, VB6 | ✅ |
+| 🟪 | `dotnet` | .NET and Unity (Mono / IL2CPP) | ✅ |
+| 🐍 | `python-targets` | Packaged Python apps and bytecode | ✅ |
+| ☕ | `jvm-android` | JAR and APK | ✅ |
+| 🌐 | `javascript-electron` | JS, Node, Electron | ✅ |
+| 🎰 | `custom-vm` | Custom VMs and bytecode interpreters | ✅ |
+| 🍷 | `dynamic-wine` | Running and observing Windows programs under Wine | ✅ |
+| 🧮 | `solvers` | Constraint solving, symbolic execution, emulation | ✅ |
+| 🔐 | `crypto-id` | Recognizing crypto and encoding primitives | ✅ |
+| 🗂️ | `formats-forensics` | Documents, archives, images, captures, custom formats | ✅ |
+| 🐉 | `ghidra-headless` | Ghidra without the GUI (headless scripts) | ✅ |
 
 ✅ ready · 🚧 in progress
 
@@ -312,27 +312,40 @@ To add a skill, copy `skills/_TEMPLATE.md` to `skills/<name>/SKILL.md`. It appea
 
 ## 🧰 Toolchain
 
-The toolchain is installed by `toolchain/install.sh` during `docker compose build`. `toolchain/README.md` describes what is installed, and the agent reads it.
+The toolchain is installed by `toolchain/install.sh` during `docker compose build`. It is split into **modules** under `toolchain/modules/*.sh`, chosen with the `EASYRE_TOOLS` build-arg. `toolchain/README.md` has the full tool-by-tool matrix, and the agent reads it.
 
-Currently installed:
+The `wine` module is always installed. The default optional set is `core,die`. Enable more in `docker-compose.yml`:
 
-| | Tool | Purpose |
+```yaml
+services:
+  easyre:
+    build:
+      context: .
+      args:
+        EASYRE_TOOLS: "core,die,ghidra"
+```
+
+| Module | What you get | Size |
 |---|---|---|
-| 🍷 | Wine (32 + 64 bit) + Xvfb | Run Windows `.exe` files, including GUI programs on a virtual display |
-| 🐍 | Python 3 + pip | Solver scripts; the agent installs libraries as needed |
-| 🟩 | Node.js | Runs Claude Code / Codex; also usable for JS targets |
-| 📦 | 7-Zip, unzip | Extract task archives |
-| 🔧 | file, curl, git, jq | Basic utilities |
+| `wine` *(always)* | Wine 32/64 + Xvfb + MinGW runtime DLLs: run `.exe`, incl. GUI | — |
+| `core` *(default)* | binutils, gdb, radare2, upx, binwalk, yara, FLOSS, capa; py: capstone, keystone, unicorn, z3, lief, pefile, pwntools, pycryptodome | ~0.5 GB |
+| `die` *(default)* | `diec` (Detect It Easy) — triage's compiler/packer detection | ~0.3 GB |
+| `ghidra` | Headless Ghidra + JDK 21 + the `prefetch` hook | ~1.5 GB |
+| `dotnet` | .NET SDK, ilspycmd, Il2CppDumper, de4dot | ~1 GB |
+| `jvm` | jadx, apktool, cfr | ~0.2 GB |
+| `python` | pyinstxtractor-ng, pycdc/pycdas, decompyle3/uncompyle6 | ~0.1 GB |
+| `js` | @electron/asar, webcrack, js-beautify | ~0.1 GB |
+| `angr` | angr symbolic execution | ~1 GB |
 
-The agent runs as root with network access and can install anything missing (`apt-get`, `pip`, `npm`) during a job. That is slower than having the tool preinstalled.
+Each module is standalone and idempotent, so the agent (root, with network) can also pull one in mid-job: `/opt/easyre/toolchain/modules/ghidra.sh`. Running a tool that is already baked in is always faster than installing it per job.
 
-**Optional prefetch hook:** if `/opt/easyre/tools/prefetch` exists and is executable, triage runs it in the background on the main native binary:
+**Prefetch hook:** the `ghidra` module installs `/opt/easyre/tools/prefetch`. When present, triage runs it in the background on the main native binary:
 
 ```
 prefetch <binary> <output_dir>
 ```
 
-Use it, for example, to run an initial Ghidra analysis while the agent reads the task.
+It drives Ghidra headless to drop `decompiled.c`, `functions.txt`, `strings.txt` and `imports.txt` into `agent/prefetch/`, so the agent can start reading decompiled code immediately. Without the `ghidra` module the hook is simply absent and triage skips it.
 
 ### 💾 Disk space
 
@@ -342,12 +355,12 @@ Rough estimates, not measured:
 |---|---|
 | Ubuntu base + Python + basic utilities | ~0.4 GB |
 | Node.js + Claude Code + Codex CLI | ~0.5 GB |
-| Wine 32/64-bit + Xvfb + prepared Wine prefix | ~1.5–2 GB |
-| MinGW runtime DLLs (for MinGW-built `.exe`) | ~0.3 GB |
-| **Image total (current toolchain)** | **~3–4 GB** |
+| `wine` module (Wine 32/64 + Xvfb + prepared prefix + MinGW DLLs) | ~2 GB |
+| `core` + `die` modules (default optional set) | ~0.8 GB |
+| **Image total (default `EASYRE_TOOLS=core,die`)** | **~4–5 GB** |
 | Build cache during `docker compose build` | +1–3 GB (free with `docker builder prune`) |
 
-Every tool you add to `toolchain/install.sh` makes the image bigger. For example, Ghidra with a JDK adds about 1–1.5 GB, and the .NET SDK adds about 1 GB. Jobs in `jobs/` also use space: each one holds a copy of the task plus the agent's files.
+Each extra module adds to this (see the module table above): `ghidra` ~1.5 GB, `dotnet` ~1 GB, `angr` ~1 GB, the rest a few hundred MB. Set `EASYRE_TOOLS` to only what you need. Jobs in `jobs/` also use space: each one holds a copy of the task plus the agent's files.
 
 ---
 
@@ -368,15 +381,6 @@ jobs/crackme-20260930-162257/
 
 Usually you only need `report.md` (or `hints.md`). `agent/notes.md` shows how the agent reasoned. `.easyre/log.jsonl` records every step, for debugging.
 
----|---|---|
-| 📄 | `report.md` | Status, answer, backend, time, tokens + the agent's write-up |
-| 💡 | `hints.md` | Graded hints (hint mode) |
-| 📝 | `TASK.md`, `triage.md` | Task and triage |
-| 📦 | `src/` | Extracted handout |
-| 🗒️ | `notes.md` | The agent's working notes |
-| 🎯 | `attempts.log` | Every checked candidate |
-| 📜 | `log.jsonl` | Full event log |
-
 ---
 
 ## 🗺️ Project layout
@@ -387,8 +391,9 @@ setup.cmd / setup.sh   one-time setup: build, choose model, log in, check
 easyre.cmd / easyre.sh wrappers to run easyre from Windows / Linux / macOS
 config/                agent instructions, mode rules, stop hook, backend settings
 skills/                playbooks for the agent
-toolchain/install.sh   your tools
-toolchain/README.md    tool list the agent reads
+toolchain/install.sh   module dispatcher (EASYRE_TOOLS)
+toolchain/modules/     one install script per tool group
+toolchain/README.md    tool matrix the agent reads
 Dockerfile             base image: agent CLIs + toolchain + skills
 docker-compose.yml     volumes: tasks/, jobs/, live-mounted easyre, config/, skills/
 ```

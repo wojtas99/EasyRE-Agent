@@ -190,6 +190,11 @@ MARKERS = [
     (b"MSVBVM60", "native", "Visual Basic 6"),
     (b"Qt5Core", "native", "Qt5"),
     (b"Qt6Core", "native", "Qt6"),
+    (b"Embarcadero", "native", "Delphi / C++Builder (Embarcadero)"),
+    (b"Borland", "native", "Delphi / Borland"),
+    (b"FastMM", "native", "Delphi (FastMM allocator)"),
+    (b"Software\\Borland\\Delphi", "native", "Delphi (Borland RTL)"),
+    (b"TObject", "native", "Delphi / Pascal RTTI (TObject VMT)"),
     (b"classes.dex", "jvm", "Android APK"),
     (b"META-INF/MANIFEST.MF", "jvm", "Java archive"),
     (b"\x00asm", "wasm", "WebAssembly"),
@@ -1147,6 +1152,32 @@ def doctor(argv):
                 hint = "is the server running? For Ollama/LM Studio on this PC use host.docker.internal" if "localhost" not in base else "use host.docker.internal instead of localhost"
                 line(False, f"API reachable ({e.__class__.__name__}: {str(e)[:80]})", hint)
     line(bool(shutil.which("wine")), "Wine (runs .exe targets)", "check toolchain/install.sh and rebuild")
+    # Toolchain report. These tools are optional (enabled via the EASYRE_TOOLS
+    # build-arg), so they never fail doctor; the agent installs what it needs.
+    import importlib.util
+    def have(mod):
+        try:
+            return importlib.util.find_spec(mod) is not None
+        except Exception:
+            return False
+    CHK, DOT = "✓", "·"
+    groups = [
+        ("core", ["objdump", "gdb", "radare2", "strings", "upx", "binwalk", "yara", "floss", "capa"]),
+        ("die", ["diec"]),
+        ("ghidra", ["analyzeHeadless"]),
+        ("dotnet", ["dotnet", "ilspycmd"]),
+        ("jvm", ["jadx", "apktool", "cfr"]),
+        ("python", ["pyinstxtractor-ng", "pycdc", "decompyle3"]),
+        ("js", ["asar", "webcrack", "js-beautify"]),
+    ]
+    print("  ---  toolchain (optional; enable with EASYRE_TOOLS):")
+    for gname, tools in groups:
+        marks = " ".join((CHK if shutil.which(t) else DOT) + t for t in tools)
+        print(f"       {gname:<7} {marks}")
+    pys = [("z3", "z3"), ("angr", "angr"), ("capstone", "capstone"), ("unicorn", "unicorn"), ("lief", "lief"), ("pefile", "pefile")]
+    print("       py      " + " ".join((CHK if have(mod) else DOT) + k for k, mod in pys))
+    pf = CHK if (PREFETCH.exists() and os.access(PREFETCH, os.X_OK)) else DOT + " (install the ghidra module)"
+    print(f"       prefetch hook: {pf}")
     names = skill_names()
     todo = [n for n in names if "TODO" in (SKILLS / n / "SKILL.md").read_text()]
     print(f"  ---  skills: {len(names)} installed, {len(names) - len(todo)} filled in, {len(todo)} still TODO")

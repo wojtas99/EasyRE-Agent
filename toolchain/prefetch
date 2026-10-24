@@ -1,0 +1,35 @@
+#!/bin/sh
+# prefetch <binary> <output_dir>
+#
+# Triage runs this in the background on the main native binary. It drives
+# Ghidra headless to produce a first-pass analysis so the agent can start
+# reading decompiled code immediately instead of waiting on its own import.
+#
+# Writes into <output_dir>:
+#   decompiled.c   decompilation of every function
+#   functions.txt  address  size  name   (one per line)
+#   strings.txt    defined strings with their address
+#   imports.txt    imported symbols by library
+set -eu
+
+BIN=${1:?usage: prefetch <binary> <output_dir>}
+OUT=${2:?usage: prefetch <binary> <output_dir>}
+mkdir -p "$OUT"
+
+GHIDRA_DIR=${GHIDRA_DIR:-/opt/ghidra}
+HEADLESS="$GHIDRA_DIR/support/analyzeHeadless"
+SCRIPTS=${EASYRE_GHIDRA_SCRIPTS:-/opt/easyre/tools/ghidra_scripts}
+
+if [ ! -x "$HEADLESS" ]; then
+  echo "prefetch: Ghidra not installed ($HEADLESS missing)" >&2
+  exit 127
+fi
+
+PROJ=$(mktemp -d)
+"$HEADLESS" "$PROJ" prefetch \
+  -import "$BIN" \
+  -scriptPath "$SCRIPTS" \
+  -postScript PrefetchDump.py "$OUT" \
+  -deleteProject
+rm -rf "$PROJ"
+echo "prefetch: done -> $OUT"
