@@ -5,16 +5,22 @@
 # Ghidra headless to produce a first-pass analysis so the agent can start
 # reading decompiled code immediately instead of waiting on its own import.
 #
-# Writes into <output_dir>:
-#   decompiled.c   decompilation of every function
-#   functions.txt  address  size  name   (one per line)
+# Writes into <output_dir>, in this order:
+#   functions.txt  address  size  name   (one per line, thunks marked)
 #   strings.txt    defined strings with their address
-#   imports.txt    imported symbols by library
-set -eu
+#   imports.txt    imported symbols (library!name)
+#   decompiled.c   decompilation of every non-thunk function (grows while running)
+#   DONE           written last; if it is missing, the run is still going or failed
+#
+# Tunables (environment):
+#   EASYRE_PREFETCH_ANALYSIS_TIMEOUT   auto-analysis limit, seconds (default 1800)
+#   EASYRE_PREFETCH_DECOMPILE_TIMEOUT  per-function decompile limit, seconds (default 30)
+#   GHIDRA_HEADLESS_MAXMEM             JVM heap for headless Ghidra (Ghidra default 2G)
+set -u
 
 BIN=${1:?usage: prefetch <binary> <output_dir>}
 OUT=${2:?usage: prefetch <binary> <output_dir>}
-mkdir -p "$OUT"
+mkdir -p "$OUT" && OUT=$(cd "$OUT" && pwd)
 
 GHIDRA_DIR=${GHIDRA_DIR:-/opt/ghidra}
 HEADLESS="$GHIDRA_DIR/support/analyzeHeadless"
@@ -28,8 +34,15 @@ fi
 PROJ=$(mktemp -d)
 "$HEADLESS" "$PROJ" prefetch \
   -import "$BIN" \
+  -analysisTimeoutPerFile "${EASYRE_PREFETCH_ANALYSIS_TIMEOUT:-1800}" \
   -scriptPath "$SCRIPTS" \
-  -postScript PrefetchDump.py "$OUT" \
+  -postScript PrefetchDump.java "$OUT" "${EASYRE_PREFETCH_DECOMPILE_TIMEOUT:-30}" \
   -deleteProject
 rm -rf "$PROJ"
-echo "prefetch: done -> $OUT"
+
+if [ -f "$OUT/DONE" ]; then
+  echo "prefetch: done -> $OUT ($(cat "$OUT/DONE"))"
+else
+  echo "prefetch: FAILED - PrefetchDump did not finish (search this log for 'SCRIPT ERROR')" >&2
+  exit 1
+fi

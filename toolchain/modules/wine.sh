@@ -1,12 +1,13 @@
 #!/bin/sh
 # wine - run Windows .exe targets on Linux (32 + 64 bit) + Xvfb for GUI +
 # the MinGW runtime DLLs so g++/MinGW-built binaries run without copying DLLs.
+# xdotool drives GUI targets on the virtual display (see the dynamic-wine skill).
 # Always installed; required by `easyre` auto-verify and `doctor`.
 set -e
 
 dpkg --add-architecture i386
 apt-get update
-apt-get install -y --no-install-recommends wine wine64 wine32:i386 xvfb xauth \
+apt-get install -y --no-install-recommends wine wine64 wine32:i386 xvfb xauth xdotool \
   gcc-mingw-w64-x86-64-posix-runtime gcc-mingw-w64-i686-posix-runtime \
   mingw-w64-x86-64-dev mingw-w64-i686-dev
 

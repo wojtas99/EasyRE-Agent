@@ -1,7 +1,10 @@
 services:
   easyre:
     image: easyre-agent
-    build: .
+    build:
+      context: .
+      args:
+        EASYRE_TOOLS: "${EASYRE_TOOLS:-core,die}"
     platform: linux/amd64
     env_file: .env
     environment:

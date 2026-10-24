@@ -22,12 +22,15 @@ URL=$(curl -fsSL https://api.github.com/repos/horsicq/DIE-engine/releases/latest
       '.assets[].browser_download_url
        | select(test("[Uu]buntu"))
        | select(test($rel))
-       | select(test($arch))' | head -1)
+       | select(test($arch))
+       | select(test("\\.deb$"))' | head -1)
 
-# Fall back to any matching-arch Ubuntu .deb if the exact release is not offered.
+# Fall back to any matching-arch Ubuntu .deb if the exact release is not offered
+# (the .deb$ check skips the portable tar.gz that also says "Ubuntu").
 [ -z "$URL" ] && URL=$(curl -fsSL https://api.github.com/repos/horsicq/DIE-engine/releases/latest \
   | jq -r --arg arch "$ARCH" \
-      '.assets[].browser_download_url | select(test("[Uu]buntu")) | select(test($arch))' | head -1)
+      '.assets[].browser_download_url | select(test("[Uu]buntu")) | select(test($arch)) | select(test("\\.deb$"))' \
+  | sort | tail -1)
 
 if [ -n "$URL" ]; then
   echo "DIE: $URL"

@@ -190,11 +190,11 @@ MARKERS = [
     (b"MSVBVM60", "native", "Visual Basic 6"),
     (b"Qt5Core", "native", "Qt5"),
     (b"Qt6Core", "native", "Qt6"),
-    (b"Embarcadero", "native", "Delphi / C++Builder (Embarcadero)"),
-    (b"Borland", "native", "Delphi / Borland"),
-    (b"FastMM", "native", "Delphi (FastMM allocator)"),
-    (b"Software\\Borland\\Delphi", "native", "Delphi (Borland RTL)"),
-    (b"TObject", "native", "Delphi / Pascal RTTI (TObject VMT)"),
+    (b"Embarcadero", "native", "Delphi / C++Builder"),
+    (b"Borland", "native", "Delphi / C++Builder"),
+    (b"FastMM", "native", "Delphi / C++Builder"),
+    (b"Software\\Borland\\Delphi", "native", "Delphi / C++Builder"),
+    (b"TObject", "native", "Delphi / C++Builder"),
     (b"classes.dex", "jvm", "Android APK"),
     (b"META-INF/MANIFEST.MF", "jvm", "Java archive"),
     (b"\x00asm", "wasm", "WebAssembly"),
@@ -240,7 +240,8 @@ def triage(src):
         out.mkdir(parents=True, exist_ok=True)
         subprocess.Popen([str(PREFETCH), str(f), str(out)], stdout=open(out / "prefetch.log", "w"),
                          stderr=subprocess.STDOUT, start_new_session=True)
-        lines.append(f"\nBackground analysis of `{f.name}` started -> /work/agent/prefetch/ (log prefetch.log)")
+        lines.append(f"\nBackground Ghidra analysis of `{f.name}` started -> /work/agent/prefetch/ "
+                     "(functions.txt, strings.txt, imports.txt, decompiled.c; DONE appears when finished; log prefetch.log)")
     return "\n".join(lines)
 
 
@@ -1160,17 +1161,17 @@ def doctor(argv):
             return importlib.util.find_spec(mod) is not None
         except Exception:
             return False
-    CHK, DOT = "✓", "·"
+    CHK, DOT = "+", "-"
     groups = [
         ("core", ["objdump", "gdb", "radare2", "strings", "upx", "binwalk", "yara", "floss", "capa"]),
         ("die", ["diec"]),
-        ("ghidra", ["analyzeHeadless"]),
-        ("dotnet", ["dotnet", "ilspycmd"]),
+        ("ghidra", ["analyzeHeadless", "pyghidraRun"]),
+        ("dotnet", ["dotnet", "ilspycmd", "il2cppdumper", "de4dot"]),
         ("jvm", ["jadx", "apktool", "cfr"]),
         ("python", ["pyinstxtractor-ng", "pycdc", "decompyle3"]),
         ("js", ["asar", "webcrack", "js-beautify"]),
     ]
-    print("  ---  toolchain (optional; enable with EASYRE_TOOLS):")
+    print("  ---  toolchain (+ installed, - missing; optional, set EASYRE_TOOLS in .env and rebuild):")
     for gname, tools in groups:
         marks = " ".join((CHK if shutil.which(t) else DOT) + t for t in tools)
         print(f"       {gname:<7} {marks}")

@@ -1,10 +1,5 @@
 FROM ubuntu:24.04
 
-# Which toolchain modules to install (see toolchain/README.md). The `wine`
-# module is always added by install.sh. Override at build time:
-#   docker compose build  (set build.args.EASYRE_TOOLS in docker-compose.yml)
-ARG EASYRE_TOOLS=core,die
-
 ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 \
     IS_SANDBOX=1 DISABLE_AUTOUPDATER=1 CODEX_HOME=/state/codex WINEDEBUG=-all \
     EASYRE_SKILLS=/opt/easyre/skills PIP_BREAK_SYSTEM_PACKAGES=1 \
@@ -21,6 +16,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY toolchain/install.sh toolchain/prefetch /opt/easyre/toolchain/
 COPY toolchain/modules/ /opt/easyre/toolchain/modules/
 COPY toolchain/ghidra_scripts/ /opt/easyre/toolchain/ghidra_scripts/
+COPY toolchain/yara/ /opt/easyre/toolchain/yara/
+# Which toolchain modules to install (see toolchain/README.md); `wine` is always
+# added. Set EASYRE_TOOLS in .env and run `docker compose build`. Declared here,
+# not at the top, so changing it does not rebuild the Node/agent-CLI layer above.
+ARG EASYRE_TOOLS=core,die
 RUN mkdir -p /opt/easyre/tools && EASYRE_TOOLS="${EASYRE_TOOLS}" sh /opt/easyre/toolchain/install.sh
 
 # Everything below changes often but is cheap; keep it after the toolchain.
