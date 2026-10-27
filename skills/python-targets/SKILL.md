@@ -7,7 +7,7 @@ description: Packaged Python apps (PyInstaller, Nuitka) and raw .pyc bytecode. U
 
 ## When to use
 
-Triage shows a PyInstaller archive (`MEI` magic, `PYZ-00.pyz`), a Nuitka build, or the handout is `.pyc`/`.pyz`. Requires the `python` module; install with `/opt/easyre/toolchain/modules/python.sh` if the tools are missing.
+Triage shows a PyInstaller archive (`MEI` magic, `PYZ-00.pyz`), a Nuitka build, or the handout is `.pyc`/`.pyz`. Requires the `python` module; install with `sh /opt/easyre/toolchain/modules/python.sh` if the tools are missing.
 
 ## Steps
 

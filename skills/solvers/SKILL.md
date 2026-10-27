@@ -31,7 +31,7 @@ for x in b: s.add(x >= 0x20, x <= 0x7e)           # printable
 print(s.check(), bytes(s.model()[x].as_long() for x in b) if s.check()==sat else '')
 ```
 
-angr (needs the `angr` module: `/opt/easyre/toolchain/modules/angr.sh`):
+angr (needs the `angr` module: `sh /opt/easyre/toolchain/modules/angr.sh`):
 
 ```python
 import angr, claripy

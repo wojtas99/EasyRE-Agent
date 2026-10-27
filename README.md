@@ -297,6 +297,8 @@ Skills are Markdown playbooks in `skills/<name>/SKILL.md`. The agent sees the li
 | 🐍 | `python-targets` | Packaged Python apps and bytecode | ✅ |
 | ☕ | `jvm-android` | JAR and APK | ✅ |
 | 🌐 | `javascript-electron` | JS, Node, Electron | ✅ |
+| 🧾 | `autoit` | Compiled AutoIt scripts | ✅ |
+| 🕸️ | `wasm` | WebAssembly modules | ✅ |
 | 🎰 | `custom-vm` | Custom VMs and bytecode interpreters | ✅ |
 | 🍷 | `dynamic-wine` | Running and observing Windows programs under Wine | ✅ |
 | 🧮 | `solvers` | Constraint solving, symbolic execution, emulation | ✅ |
@@ -335,9 +337,11 @@ services:
 | `jvm` | jadx, apktool, cfr | ~0.2 GB |
 | `python` | pyinstxtractor-ng, pycdc/pycdas, decompyle3/uncompyle6 | ~0.1 GB |
 | `js` | @electron/asar, webcrack, js-beautify | ~0.1 GB |
+| `autoit` | autoit-ripper, AutoIt interpreter (`autoit3`, under Wine) | ~0.05 GB |
+| `wasm` | wabt: wasm-objdump, wasm2wat, wasm-decompile, wasm-interp, wasm2c | ~0.02 GB |
 | `angr` | angr symbolic execution | ~1 GB |
 
-Each module is standalone and idempotent, so the agent (root, with network) can also pull one in mid-job: `/opt/easyre/toolchain/modules/ghidra.sh`. Running a tool that is already baked in is always faster than installing it per job.
+Each module is standalone and idempotent, so the agent (root, with network) can also pull one in mid-job: `sh /opt/easyre/toolchain/modules/ghidra.sh`. Running a tool that is already baked in is always faster than installing it per job.
 
 **Prefetch hook:** the `ghidra` module installs `/opt/easyre/tools/prefetch`. When present, triage runs it in the background on the main native binary:
 

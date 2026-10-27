@@ -12,7 +12,7 @@
 # targets and to auto-verify). Default optional set: core,die.
 #
 # Every module is standalone and idempotent, so the agent can also run one
-# mid-job to pull in a heavier tool, e.g.:  /opt/easyre/toolchain/modules/ghidra.sh
+# mid-job to pull in a heavier tool, e.g.:  sh /opt/easyre/toolchain/modules/ghidra.sh
 set -e
 
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)

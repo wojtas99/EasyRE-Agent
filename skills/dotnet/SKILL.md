@@ -7,7 +7,7 @@ description: .NET / Mono managed assemblies and Unity games (Mono or IL2CPP). De
 
 ## When to use
 
-Triage shows `.NET assembly` (`mscoree.dll`), a Unity game (`UnityPlayer`), or IL2CPP (`global-metadata.dat`). Requires the `dotnet` module; install with `/opt/easyre/toolchain/modules/dotnet.sh` if the tools are missing.
+Triage shows `.NET assembly` (`mscoree.dll`), a Unity game (`UnityPlayer`), or IL2CPP (`global-metadata.dat`). Requires the `dotnet` module; install with `sh /opt/easyre/toolchain/modules/dotnet.sh` if the tools are missing.
 
 ## Steps
 

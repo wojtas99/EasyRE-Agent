@@ -7,7 +7,7 @@ description: JavaScript, Node and Electron apps - unpack asar, undo bundling and
 
 ## When to use
 
-Triage shows an Electron app (`app.asar`), or the handout is JavaScript / a Node bundle. Requires the `js` module; install with `/opt/easyre/toolchain/modules/js.sh` if the tools are missing. Node is always in the base image.
+Triage shows an Electron app (`app.asar`), or the handout is JavaScript / a Node bundle. Requires the `js` module; install with `sh /opt/easyre/toolchain/modules/js.sh` if the tools are missing. Node is always in the base image.
 
 ## Steps
 
@@ -39,6 +39,7 @@ node -e 'console.log(Buffer.from("ZmxhZw==","base64").toString())'   # decode co
 - Obfuscated JS often builds the comparison string at runtime from an array + index math; `webcrack` resolves much of this, but sometimes evaluating the decoder in `node` is fastest.
 - Source maps (`.map`), if shipped, hand you the original source — check for them before deobfuscating.
 - Electron logic may be split between the main process (`main.js`) and the renderer; the check can be in either.
+- If the JS loads WebAssembly (`WebAssembly.instantiate`, a `.wasm` file, or a base64 blob starting `AGFzbQ`), the check is probably in the module: switch to the `wasm` skill.
 
 ## Verification
 

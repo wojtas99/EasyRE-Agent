@@ -183,7 +183,8 @@ MARKERS = [
     (b"UnityPlayer", "dotnet", "Unity game"),
     (b"global-metadata.dat", "dotnet", "Unity IL2CPP"),
     (b"UPX!", "packed", "UPX"),
-    (b"AU3!EA06", "script-bundle", "AutoIt script"),
+    (b"AU3!EA06", "script-bundle", "AutoIt script (EA06, v3.2.6+)"),
+    (b"AU3!EA05", "script-bundle", "AutoIt script (EA05, older v3)"),
     (b"app.asar", "javascript", "Electron app"),
     (b"Go build ID", "native-go", "Go binary"),
     (b"/rustc/", "native-rust", "Rust binary"),
@@ -198,7 +199,13 @@ MARKERS = [
     (b"classes.dex", "jvm", "Android APK"),
     (b"META-INF/MANIFEST.MF", "jvm", "Java archive"),
     (b"\x00asm", "wasm", "WebAssembly"),
+    (b"AGFzbQ", "wasm", "WebAssembly (base64-embedded)"),
 ]
+
+
+# Executables that only host code of another kind (interpreter + script,
+# runtime + bytecode, Electron shell). Ghidra prefetch on them is wasted time.
+NOT_NATIVE = ("python-bundle", "dotnet", "script-bundle", "javascript")
 
 
 def skill_names():
@@ -229,8 +236,8 @@ def triage(src):
             except (subprocess.TimeoutExpired, OSError):
                 pass
         lines.append(f"- {f.relative_to(src)} ({f.stat().st_size} B): {ft}" + "".join(f"\n  - {t}" for t in tags))
-        if re.search(r"PE32|ELF", ft) and "Mono/.Net" not in ft and not any("python" in t or "dotnet" in t for t in tags) \
-                and ".fixed." not in f.name:
+        hosted = any(f"[{k}]" in t for k in NOT_NATIVE for t in tags) or any("AutoIt" in t for t in tags)
+        if re.search(r"PE32|ELF", ft) and "Mono/.Net" not in ft and not hosted and ".fixed." not in f.name:
             native.append(f)
     if len(files) > 200:
         lines.append(f"- ... {len(files) - 200} more files")
@@ -1170,6 +1177,8 @@ def doctor(argv):
         ("jvm", ["jadx", "apktool", "cfr"]),
         ("python", ["pyinstxtractor-ng", "pycdc", "decompyle3"]),
         ("js", ["asar", "webcrack", "js-beautify"]),
+        ("autoit", ["autoit-ripper", "autoit3"]),
+        ("wasm", ["wasm-objdump", "wasm2wat", "wasm-decompile", "wasm-interp"]),
     ]
     print("  ---  toolchain (+ installed, - missing; optional, set EASYRE_TOOLS in .env and rebuild):")
     for gname, tools in groups:

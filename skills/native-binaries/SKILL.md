@@ -7,7 +7,7 @@ description: PE and ELF compiled code (C, C++, Go, Rust, Delphi, VB6). Identify 
 
 ## When to use
 
-The target is a compiled native executable (PE `.exe`/`.dll` or ELF) and not .NET, Python, Java or JavaScript. Triage's `file`/DIE line and the markers tell you which.
+The target is a compiled native executable (PE `.exe`/`.dll` or ELF) and not .NET, Python, Java, JavaScript or a compiled AutoIt script (see `autoit`). Triage's `file`/DIE line and the markers tell you which.
 
 ## Steps
 

@@ -12,7 +12,7 @@ At the start of every task, before choosing tools. This is the overall plan. The
 ## Steps
 
 1. **Orient.** Read `TASK.md`: its wording and title often point at the intended path. Read `triage.md`: it already lists the file type and, if DIE is installed, the compiler, packer and protections. Do not re-run tools to learn what is already there.
-2. **Pick the category**: native PE/ELF, .NET, Python, Java/Android, JavaScript, custom VM, or a non-code file. Load the matching skill.
+2. **Pick the category**: native PE/ELF, .NET, Python, Java/Android, JavaScript, AutoIt, WebAssembly, custom VM, or a non-code file. Load the matching skill.
 3. **Packed or obfuscated?** Unpack a copy first. If the answer is built at runtime, plan to run or emulate that part instead of reading all of it.
 4. **Find the check.** Where does the input enter (argv, stdin, a text field, a key handler)? What is it compared with, transformed by, or passed to?
 5. **Extract, do not guess.** Pull the real constants, tables and keys out of the file.

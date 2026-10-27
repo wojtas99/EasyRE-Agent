@@ -7,7 +7,7 @@ description: Java/Kotlin JARs and class files, and Android APKs (dex, resources,
 
 ## When to use
 
-Triage shows a Java archive (`META-INF/MANIFEST.MF`) or an Android APK (`classes.dex`). Requires the `jvm` module; install with `/opt/easyre/toolchain/modules/jvm.sh` if the tools are missing.
+Triage shows a Java archive (`META-INF/MANIFEST.MF`) or an Android APK (`classes.dex`). Requires the `jvm` module; install with `sh /opt/easyre/toolchain/modules/jvm.sh` if the tools are missing.
 
 ## Steps
 

@@ -3,7 +3,7 @@
 This file lists what is installed in the image. The agent reads it to know
 which tools it can use. Always confirm with `which <tool>` before use; if a
 tool is missing, you are root with network access, so install it (`apt-get`,
-`pip`, `npm`) or run the matching module: `/opt/easyre/toolchain/modules/<name>.sh`.
+`pip`, `npm`) or run the matching module: `sh /opt/easyre/toolchain/modules/<name>.sh`.
 
 ## How it is built
 
@@ -23,7 +23,7 @@ services:
 ```
 
 Each module is standalone and idempotent, so the agent can also pull one in
-during a job, e.g. `/opt/easyre/toolchain/modules/ghidra.sh`.
+during a job, e.g. `sh /opt/easyre/toolchain/modules/ghidra.sh`.
 
 ## Always installed: `wine`
 
@@ -112,6 +112,27 @@ JavaScript / Node / Electron.
 | `asar` (`@electron/asar`) | Unpack `app.asar`: `asar extract app.asar out/` |
 | `webcrack` | Undo webpack/bundling + common obfuscation |
 | `js-beautify` | Pretty-print minified JS |
+
+### `autoit` — ~0.05 GB
+
+Compiled AutoIt scripts (`AU3!EA05`/`AU3!EA06` in the `.exe`).
+
+| Tool | Use |
+|---|---|
+| `autoit-ripper` | Extract and decompile the embedded script: `autoit-ripper app.exe out/` |
+| `autoit3` | AutoIt interpreter under Wine, to run an edited copy: `xvfb-run -a autoit3 /ErrorStdOut dbg.au3` |
+
+### `wasm` — ~0.02 GB
+
+WebAssembly modules. Node (base image) instantiates them and calls exports.
+
+| Tool | Use |
+|---|---|
+| `wasm-objdump` | Imports, exports, data segments, names: `wasm-objdump -x mod.wasm` |
+| `wasm-decompile` | C-like pseudo-code: `wasm-decompile mod.wasm -o mod.dcmp` |
+| `wasm2wat` / `wat2wasm` | Binary to text and back (read, patch, rebuild) |
+| `wasm-interp` | Run exports or a WASI `_start`: `wasm-interp --wasi app.wasm` |
+| `wasm2c` | Module to C source |
 
 ### `angr` — ~1+ GB
 

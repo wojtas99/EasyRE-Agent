@@ -7,7 +7,7 @@ description: Drive Ghidra without the GUI to decompile native binaries in batch.
 
 ## When to use
 
-You want readable decompiled C for a native binary and the lightweight tools (`objdump`, `r2`) are not enough. Requires the `ghidra` module (`which analyzeHeadless`); if it is missing, install it with `/opt/easyre/toolchain/modules/ghidra.sh`.
+You want readable decompiled C for a native binary and the lightweight tools (`objdump`, `r2`) are not enough. Requires the `ghidra` module (`which analyzeHeadless`); if it is missing, install it with `sh /opt/easyre/toolchain/modules/ghidra.sh`.
 
 ## Steps
 
