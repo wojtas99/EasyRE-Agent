@@ -36,6 +36,20 @@ EasyRE-Agent runs an AI agent inside a Docker container. The container holds you
 
 ---
 
+## 🎯 Why it exists
+
+Reversing a crackme or a CTF binary is mostly the same loop every time: figure out what the file is, pick the right tools, find the check, pull out the constants, write a small solver, and confirm the answer. An AI agent can do much of that loop, but in practice three things get in the way:
+
+- **The toolchain.** A typical task needs a mix of Ghidra, Detect It Easy, Wine, and decompilers for .NET, Python, Java or JavaScript. Installing and wiring all of that on every machine is slow and fragile. EasyRE-Agent ships it as one Docker image that behaves the same on Windows, Linux and macOS.
+- **Guessing.** Without tools and a checker, a model tends to produce an answer that only looks plausible. Here the agent works on the real file with real tools, follows a playbook (skill) for that kind of target, and an answer counts only when the program or your checker accepts it.
+- **Lock-in.** It works with Claude, Codex or any OpenAI-compatible model, including local ones, so you can use what you already have and compare models on the same task.
+
+It is also built for learning. Being handed the answer teaches little, so hint and tutor modes let the agent solve the task privately and then guide you toward the solution without spoiling it.
+
+EasyRE-Agent is meant for crackmes, CTF reversing challenges and puzzle binaries, not for analyzing real malware (see [⚠️ Security](#️-security)).
+
+---
+
 ## 🚀 Quick start
 
 Pick your system: [💻 Windows](#-windows) · [🐧 Linux](#-linux) · [🍎 macOS](#-macos)
