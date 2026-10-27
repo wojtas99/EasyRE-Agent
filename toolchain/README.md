@@ -13,6 +13,10 @@ every module below. A smaller image takes a comma-separated subset in `.env`,
 e.g. `EASYRE_TOOLS=core,die,ghidra`, then `docker compose build`. The `wine`
 module is always installed.
 
+Each module is its own image layer, built in a fixed order (heavy and stable
+first), so a module that fails or is edited rebuilds only from its own layer.
+A new module needs its own `COPY` + `RUN` pair in the `Dockerfile`.
+
 Each module is standalone and idempotent, so a missing one can be pulled in
 during a job, e.g. `sh /opt/easyre/toolchain/modules/ghidra.sh`. The install
 is lost when the job ends (every job runs in a fresh container).

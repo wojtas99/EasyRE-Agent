@@ -9,7 +9,7 @@ apt-get update
 apt-get install -y --no-install-recommends \
   binutils gdb gdbserver strace ltrace \
   radare2 upx-ucl binwalk yara xxd bsdmainutils libimage-exiftool-perl \
-  cmake build-essential libmagic1 patchelf curl jq unzip
+  cmake build-essential python3-dev libmagic1 patchelf curl jq unzip
 
 # Python RE libraries. PIP_BREAK_SYSTEM_PACKAGES=1 is set in the image env.
 pip install --no-cache-dir \
