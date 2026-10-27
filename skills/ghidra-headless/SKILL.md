@@ -28,10 +28,10 @@ prefetch /work/src/target.exe /work/agent/gh
 # or directly:
 analyzeHeadless /tmp/proj gh -import /work/src/target.exe \
   -scriptPath /opt/easyre/tools/ghidra_scripts \
-  -postScript PrefetchDump.py /work/agent/gh -deleteProject
+  -postScript PrefetchDump.java /work/agent/gh -deleteProject
 ```
 
-Write your own post-script (Jython 2.7 API) to `/work/agent/*.py` and pass it with `-postScript`. Useful calls:
+Write your own post-script in Java (`.java`, like the shipped `PrefetchDump.java`) and pass it with `-postScript Name.java`. For Python 3, use PyGhidra (`pyghidraRun`), which the `ghidra` module installs — there is no bundled Jython. The GhidraScript API below is the same from either path (Python 3 shown):
 
 ```python
 # currentProgram is provided. Decompile one function:
@@ -48,7 +48,7 @@ Pass arguments to your script with `getScriptArgs()` and reach them after `-post
 
 ## Pitfalls
 
-- Ghidra scripts are **Jython 2.7**, not Python 3: `print x` works, `unicode` exists, no f-strings in older trees — keep scripts simple and `str()`-based.
+- Two scripting paths: Java post-scripts (`.java`) run on stock headless Ghidra — that is what the shipped `PrefetchDump.java` uses; Python scripts need **PyGhidra** (CPython 3, via `pyghidraRun`), installed by this module. Match the file extension to the path you pick; do not assume a bundled Jython — there is none.
 - Headless import of a large binary is slow (minutes). Analyze once, write results to `agent/`, then read files — do not re-run per question.
 - The decompiler guesses calling conventions and types; when the C looks nonsensical, drop to the Listing/disassembly for that function.
 - Use `-deleteProject` (or a temp project dir) so repeated runs do not collide on a locked project.

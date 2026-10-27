@@ -330,7 +330,7 @@ services:
 | `wine` *(always)* | Wine 32/64 + Xvfb + MinGW runtime DLLs: run `.exe`, incl. GUI | — |
 | `core` *(default)* | binutils, gdb, radare2, upx, binwalk, yara, FLOSS, capa; py: capstone, keystone, unicorn, z3, lief, pefile, pwntools, pycryptodome | ~0.5 GB |
 | `die` *(default)* | `diec` (Detect It Easy) — triage's compiler/packer detection | ~0.3 GB |
-| `ghidra` | Headless Ghidra + JDK 21 + the `prefetch` hook | ~1.5 GB |
+| `ghidra` | Headless Ghidra + matching JDK + the `prefetch` hook | ~1.5 GB |
 | `dotnet` | .NET SDK, ilspycmd, Il2CppDumper, de4dot | ~1 GB |
 | `jvm` | jadx, apktool, cfr | ~0.2 GB |
 | `python` | pyinstxtractor-ng, pycdc/pycdas, decompyle3/uncompyle6 | ~0.1 GB |

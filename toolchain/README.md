@@ -46,6 +46,7 @@ Everyday static analysis and solver scripting.
 | `radare2` (`r2`) | Interactive/scriptable disassembly: `r2 -A -q -c 'afl;pdf @ main' file` |
 | `upx` | Unpack UPX: `upx -d -o out.exe packed.exe` |
 | `binwalk` | Carve embedded data: `binwalk -e file` |
+| `exiftool`, `xxd` | File metadata; hex dumps (see `formats-forensics`) |
 | `yara` + `yara-python` | Signature matching |
 | `floss`, `capa` | Deobfuscated strings; capability detection |
 | py: `capstone` `keystone` `unicorn` | Disassemble / assemble / emulate |
@@ -60,7 +61,7 @@ with compiler, packer and protector detection: `diec <file>`.
 
 ### `ghidra` — ~1.5 GB
 
-Headless Ghidra + JDK 21.
+Headless Ghidra, the JDK the release requires (installed and pinned automatically), and PyGhidra for Python 3 scripts.
 
 - `analyzeHeadless` (also at `/opt/easyre/tools/analyzeHeadless`): batch decompilation.
 - `prefetch <binary> <outdir>`: the triage hook. If the `ghidra` module is
@@ -76,7 +77,7 @@ See the `ghidra-headless` skill.
 
 | Tool | Use |
 |---|---|
-| `dotnet` (SDK 8) | Run managed tools; build helpers |
+| `dotnet` (SDK 10) | Run managed tools; build helpers |
 | `ilspycmd` | Decompile assemblies to C#: `ilspycmd app.dll -o out/` |
 | `il2cppdumper` | Unity IL2CPP: recover metadata from `GameAssembly` + `global-metadata.dat` |
 | `de4dot` | Deobfuscate protected .NET (best effort) |
