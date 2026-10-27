@@ -40,7 +40,7 @@ EasyRE-Agent runs an AI agent inside a Docker container. The container holds you
 
 Pick your system: [💻 Windows](#-windows) · [🐧 Linux](#-linux) · [🍎 macOS](#-macos)
 
-You need about 5 GB of free disk space (see [💾 Disk space](#-disk-space)).
+You need about 10 GB of free disk space (see [💾 Disk space](#-disk-space)).
 
 ### 💻 Windows
 
@@ -314,24 +314,19 @@ To add a skill, copy `skills/_TEMPLATE.md` to `skills/<name>/SKILL.md`. It appea
 
 ## 🧰 Toolchain
 
-The toolchain is installed by `toolchain/install.sh` during `docker compose build`. It is split into **modules** under `toolchain/modules/*.sh`, chosen with the `EASYRE_TOOLS` build-arg. `toolchain/README.md` has the full tool-by-tool matrix, and the agent reads it.
+The toolchain is installed by `toolchain/install.sh` during `docker compose build`. It is split into **modules** under `toolchain/modules/*.sh`, chosen with the `EASYRE_TOOLS` setting in `.env`. `toolchain/README.md` has the full tool-by-tool matrix, and the agent reads it.
 
-The `wine` module is always installed. The default optional set is `core,die`. Enable more in `docker-compose.yml`:
+By default (`EASYRE_TOOLS=all`) every module below is installed. For a smaller image, list only the modules you need in `.env` and rebuild:
 
-```yaml
-services:
-  easyre:
-    build:
-      context: .
-      args:
-        EASYRE_TOOLS: "core,die,ghidra"
+```
+EASYRE_TOOLS=core,die,ghidra
 ```
 
 | Module | What you get | Size |
 |---|---|---|
 | `wine` *(always)* | Wine 32/64 + Xvfb + MinGW runtime DLLs: run `.exe`, incl. GUI | — |
-| `core` *(default)* | binutils, gdb, radare2, upx, binwalk, yara, FLOSS, capa; py: capstone, keystone, unicorn, z3, lief, pefile, pwntools, pycryptodome | ~0.5 GB |
-| `die` *(default)* | `diec` (Detect It Easy) — triage's compiler/packer detection | ~0.3 GB |
+| `core` | binutils, gdb, radare2, upx, binwalk, yara, FLOSS, capa; py: capstone, keystone, unicorn, z3, lief, pefile, pwntools, pycryptodome | ~0.5 GB |
+| `die` | `diec` (Detect It Easy) — triage's compiler/packer detection | ~0.3 GB |
 | `ghidra` | Headless Ghidra + matching JDK + the `prefetch` hook | ~1.5 GB |
 | `dotnet` | .NET SDK, ilspycmd, Il2CppDumper, de4dot | ~1 GB |
 | `jvm` | jadx, apktool, cfr | ~0.2 GB |
@@ -341,7 +336,7 @@ services:
 | `wasm` | wabt: wasm-objdump, wasm2wat, wasm-decompile, wasm-interp, wasm2c | ~0.02 GB |
 | `angr` | angr symbolic execution | ~1 GB |
 
-Each module is standalone and idempotent, so the agent (root, with network) can also pull one in mid-job: `sh /opt/easyre/toolchain/modules/ghidra.sh`. Running a tool that is already baked in is always faster than installing it per job.
+Each module is standalone and idempotent, so the agent (root, with network) can also pull a missing one in mid-job: `sh /opt/easyre/toolchain/modules/ghidra.sh`. That install is lost when the job ends, because every job runs in a fresh container, so bake in what you use.
 
 **Prefetch hook:** the `ghidra` module installs `/opt/easyre/tools/prefetch`. When present, triage runs it in the background on the main native binary:
 
@@ -360,11 +355,11 @@ Rough estimates, not measured:
 | Ubuntu base + Python + basic utilities | ~0.4 GB |
 | Node.js + Claude Code + Codex CLI | ~0.5 GB |
 | `wine` module (Wine 32/64 + Xvfb + prepared prefix + MinGW DLLs) | ~2 GB |
-| `core` + `die` modules (default optional set) | ~0.8 GB |
-| **Image total (default `EASYRE_TOOLS=core,die`)** | **~4–5 GB** |
+| All other modules (`core`, `die`, `ghidra`, `dotnet`, `jvm`, `python`, `js`, `autoit`, `wasm`, `angr`) | ~4.8 GB |
+| **Image total (default `EASYRE_TOOLS=all`)** | **~8–9 GB** |
 | Build cache during `docker compose build` | +1–3 GB (free with `docker builder prune`) |
 
-Each extra module adds to this (see the module table above): `ghidra` ~1.5 GB, `dotnet` ~1 GB, `angr` ~1 GB, the rest a few hundred MB. Set `EASYRE_TOOLS` to only what you need. Jobs in `jobs/` also use space: each one holds a copy of the task plus the agent's files.
+To save space, set `EASYRE_TOOLS` in `.env` to a subset and rebuild (see the module table above). The biggest are `ghidra` ~1.5 GB, `dotnet` ~1 GB and `angr` ~1 GB; the rest are a few hundred MB or less. `core,die` alone gives a ~4–5 GB image. Jobs in `jobs/` also use space: each one holds a copy of the task plus the agent's files.
 
 ---
 

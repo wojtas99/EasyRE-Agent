@@ -20,7 +20,7 @@ COPY toolchain/yara/ /opt/easyre/toolchain/yara/
 # Which toolchain modules to install (see toolchain/README.md); `wine` is always
 # added. Set EASYRE_TOOLS in .env and run `docker compose build`. Declared here,
 # not at the top, so changing it does not rebuild the Node/agent-CLI layer above.
-ARG EASYRE_TOOLS=core,die
+ARG EASYRE_TOOLS=all
 RUN mkdir -p /opt/easyre/tools && EASYRE_TOOLS="${EASYRE_TOOLS}" sh /opt/easyre/toolchain/install.sh
 
 # Everything below changes often but is cheap; keep it after the toolchain.

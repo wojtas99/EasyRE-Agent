@@ -8,22 +8,14 @@ tool is missing, you are root with network access, so install it (`apt-get`,
 ## How it is built
 
 The toolchain is split into modules under `toolchain/modules/*.sh`, selected at
-build time with the `EASYRE_TOOLS` build-arg (comma-separated). The `wine`
-module is always installed. Default optional set: `core,die`.
+build time with the `EASYRE_TOOLS` build-arg. The default, `all`, installs
+every module below. A smaller image takes a comma-separated subset in `.env`,
+e.g. `EASYRE_TOOLS=core,die,ghidra`, then `docker compose build`. The `wine`
+module is always installed.
 
-Enable more in `docker-compose.yml`:
-
-```yaml
-services:
-  easyre:
-    build:
-      context: .
-      args:
-        EASYRE_TOOLS: "core,die,ghidra"
-```
-
-Each module is standalone and idempotent, so the agent can also pull one in
-during a job, e.g. `sh /opt/easyre/toolchain/modules/ghidra.sh`.
+Each module is standalone and idempotent, so a missing one can be pulled in
+during a job, e.g. `sh /opt/easyre/toolchain/modules/ghidra.sh`. The install
+is lost when the job ends (every job runs in a fresh container).
 
 ## Always installed: `wine`
 
@@ -35,7 +27,7 @@ during a job, e.g. `sh /opt/easyre/toolchain/modules/ghidra.sh`.
 
 ## Modules
 
-### `core` (default) — ~0.5 GB
+### `core` — ~0.5 GB
 
 Everyday static analysis and solver scripting.
 
@@ -54,7 +46,7 @@ Everyday static analysis and solver scripting.
 | py: `pefile` `lief` `pyelftools` `macholib` | Parse PE / ELF / Mach-O |
 | py: `pwntools` `ropgadget` `pycryptodome` | Exploit/solver helpers, ROP, crypto |
 
-### `die` (default) — ~0.3 GB
+### `die` — ~0.3 GB
 
 `diec` — Detect It Easy console. `easyre` triage calls it to fill `triage.md`
 with compiler, packer and protector detection: `diec <file>`.
