@@ -132,8 +132,8 @@ WebAssembly modules. Node (base image) instantiates them and calls exports.
 
 ### `angr` — ~1+ GB
 
-`angr` — binary symbolic execution (Python). Opt-in; heavy. See the `solvers`
-skill.
+`angr` — binary symbolic execution (Python), pinned to 9.2 so `import claripy`
+works (angr 10 moved claripy inside angr). Heavy. See the `solvers` skill.
 
 ## Also in the base image (not a module)
 

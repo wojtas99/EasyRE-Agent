@@ -348,7 +348,7 @@ EASYRE_TOOLS=core,die,ghidra
 | `js` | @electron/asar, webcrack, js-beautify | ~0.1 GB |
 | `autoit` | autoit-ripper, AutoIt interpreter (`autoit3`, under Wine) | ~0.05 GB |
 | `wasm` | wabt: wasm-objdump, wasm2wat, wasm-decompile, wasm-interp, wasm2c | ~0.02 GB |
-| `angr` | angr symbolic execution | ~1 GB |
+| `angr` | angr 9.2 symbolic execution (pinned below 10, see `toolchain/README.md`) | ~1 GB |
 
 Each module is standalone and idempotent, so the agent (root, with network) can also pull a missing one in mid-job: `sh /opt/easyre/toolchain/modules/ghidra.sh`. That install is lost when the job ends, because every job runs in a fresh container, so bake in what you use.
 

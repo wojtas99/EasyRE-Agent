@@ -1,6 +1,6 @@
 ---
 name: solvers
-description: Recover input with constraint solving (z3), symbolic execution (angr), or emulation (unicorn) instead of inverting a check by hand. Load when the check is invertible-but-messy, or path-dependent. z3/unicorn are in core; angr needs its module.
+description: Recover input with constraint solving (z3), symbolic execution (angr), or emulation (unicorn) instead of inverting a check by hand. Load when the check is invertible-but-messy, or path-dependent. z3/unicorn are in core; angr is in the angr module.
 ---
 
 # solvers
@@ -31,7 +31,7 @@ for x in b: s.add(x >= 0x20, x <= 0x7e)           # printable
 print(s.check(), bytes(s.model()[x].as_long() for x in b) if s.check()==sat else '')
 ```
 
-angr (needs the `angr` module: `sh /opt/easyre/toolchain/modules/angr.sh`):
+angr (the `angr` module; if `import angr` fails, install it with `sh /opt/easyre/toolchain/modules/angr.sh`):
 
 ```python
 import angr, claripy
@@ -49,6 +49,7 @@ unicorn (in `core`): map the code, set registers/stack, write the input into mem
 - z3 is only as right as your transcription — re-read the decompiled check and mirror it exactly, including integer widths and overflow (use `BitVec`, not `Int`).
 - A solver answer is a hypothesis until the real target accepts it.
 - Don't reach for angr when a 5-line z3 model or a direct inversion would do.
+- The image pins angr 9.2, where `import claripy` works. In angr 10+ claripy lives inside angr (`from angr.rustylib import claripy`); check `angr.__version__` before copying a script from a write-up.
 
 ## Verification
 
