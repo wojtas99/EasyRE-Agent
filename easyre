@@ -1180,7 +1180,7 @@ def doctor(argv):
         ("autoit", ["autoit-ripper", "autoit3"]),
         ("wasm", ["wasm-objdump", "wasm2wat", "wasm-decompile", "wasm-interp"]),
     ]
-    print("  ---  toolchain (+ installed, - missing; optional, set EASYRE_TOOLS in .env and rebuild):")
+    print("  ---  toolchain (+ installed, - missing; EASYRE_TOOLS in .env picks modules, rebuild after a change):")
     for gname, tools in groups:
         marks = " ".join((CHK if shutil.which(t) else DOT) + t for t in tools)
         print(f"       {gname:<7} {marks}")

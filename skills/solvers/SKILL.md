@@ -49,7 +49,7 @@ unicorn (in `core`): map the code, set registers/stack, write the input into mem
 - z3 is only as right as your transcription — re-read the decompiled check and mirror it exactly, including integer widths and overflow (use `BitVec`, not `Int`).
 - A solver answer is a hypothesis until the real target accepts it.
 - Don't reach for angr when a 5-line z3 model or a direct inversion would do.
-- The image pins angr 9.2, where `import claripy` works. In angr 10+ claripy lives inside angr (`from angr.rustylib import claripy`); check `angr.__version__` before copying a script from a write-up.
+- The image pins angr 9.x (below 10), where `import claripy` works. In angr 10+ claripy lives inside angr (`from angr.rustylib import claripy`); check `angr.__version__` before copying a script from a write-up.
 
 ## Verification
 
