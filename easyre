@@ -175,32 +175,39 @@ def extract(f, dst):
 
 SKILLS = Path(os.environ.get("EASYRE_SKILLS", "/opt/easyre/skills"))
 PREFETCH = Path(os.environ.get("EASYRE_PREFETCH", "/opt/easyre/tools/prefetch"))
+# (signature, kind, label, mode). mode: "any" = anywhere in the file;
+# "start" = only as the file's leading bytes (a real file magic, not a
+# coincidental hit deep inside a big binary); "weak" = a signal too common to
+# trust alone, kept only when a strong marker already produced the same label.
 MARKERS = [
-    (b"MEI\x0c\x0b\x0a\x0b\x0e", "python-bundle", "PyInstaller archive"),
-    (b"PYZ-00.pyz", "python-bundle", "PyInstaller archive"),
-    (b"Nuitka", "python-bundle", "Nuitka build"),
-    (b"mscoree.dll", "dotnet", ".NET assembly"),
-    (b"UnityPlayer", "dotnet", "Unity game"),
-    (b"global-metadata.dat", "dotnet", "Unity IL2CPP"),
-    (b"UPX!", "packed", "UPX"),
-    (b"AU3!EA06", "script-bundle", "AutoIt script (EA06, v3.2.6+)"),
-    (b"AU3!EA05", "script-bundle", "AutoIt script (EA05, older v3)"),
-    (b"app.asar", "javascript", "Electron app"),
-    (b"Go build ID", "native-go", "Go binary"),
-    (b"/rustc/", "native-rust", "Rust binary"),
-    (b"MSVBVM60", "native", "Visual Basic 6"),
-    (b"Qt5Core", "native", "Qt5"),
-    (b"Qt6Core", "native", "Qt6"),
-    (b"Embarcadero", "native", "Delphi / C++Builder"),
-    (b"Borland", "native", "Delphi / C++Builder"),
-    (b"FastMM", "native", "Delphi / C++Builder"),
-    (b"Software\\Borland\\Delphi", "native", "Delphi / C++Builder"),
-    (b"TObject", "native", "Delphi / C++Builder"),
-    (b"classes.dex", "jvm", "Android APK"),
-    (b"META-INF/MANIFEST.MF", "jvm", "Java archive"),
-    (b"\x00asm", "wasm", "WebAssembly"),
-    (b"AGFzbQ", "wasm", "WebAssembly (base64-embedded)"),
+    (b"MEI\x0c\x0b\x0a\x0b\x0e", "python-bundle", "PyInstaller archive", "any"),
+    (b"PYZ-00.pyz", "python-bundle", "PyInstaller archive", "any"),
+    (b"Nuitka", "python-bundle", "Nuitka build", "any"),
+    (b"mscoree.dll", "dotnet", ".NET assembly", "any"),
+    (b"UnityPlayer", "dotnet", "Unity game", "any"),
+    (b"global-metadata.dat", "dotnet", "Unity IL2CPP", "any"),
+    (b"UPX!", "packed", "UPX", "any"),
+    (b"AU3!EA06", "script-bundle", "AutoIt script (EA06, v3.2.6+)", "any"),
+    (b"AU3!EA05", "script-bundle", "AutoIt script (EA05, older v3)", "any"),
+    (b"app.asar", "javascript", "Electron app", "any"),
+    (b"Go build ID", "native-go", "Go binary", "any"),
+    (b"/rustc/", "native-rust", "Rust binary", "any"),
+    (b"MSVBVM60", "native", "Visual Basic 6", "any"),
+    (b"Qt5Core", "native", "Qt5", "any"),
+    (b"Qt6Core", "native", "Qt6", "any"),
+    (b"Embarcadero", "native", "Delphi / C++Builder", "any"),
+    (b"Borland", "native", "Delphi / C++Builder", "any"),
+    (b"FastMM", "native", "Delphi / C++Builder", "any"),
+    (b"Software\\Borland\\Delphi", "native", "Delphi / C++Builder", "any"),
+    (b"TObject", "native", "Delphi / C++Builder", "weak"),
+    (b"classes.dex", "jvm", "Android APK", "any"),
+    (b"META-INF/MANIFEST.MF", "jvm", "Java archive", "any"),
+    (b"\x00asm\x01\x00\x00\x00", "wasm", "WebAssembly", "start"),
+    (b"AGFzbQ", "wasm", "WebAssembly (base64-embedded)", "any"),
 ]
+
+# diec colorizes its output; strip the ANSI escapes before they reach triage.md.
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 
 # Executables that only host code of another kind (interpreter + script,
@@ -221,7 +228,12 @@ def triage(src):
             data = f.read_bytes()[: 96 << 20]
         except OSError:
             data = b""
-        tags = sorted({f"{label} [{kind}]" for sig, kind, label in MARKERS if sig in data})
+        strong, weak = set(), set()
+        for sig, kind, label, mode in MARKERS:
+            hit = data.startswith(sig) if mode == "start" else sig in data
+            if hit:
+                (weak if mode == "weak" else strong).add(f"{label} [{kind}]")
+        tags = sorted(strong | (weak & strong))
         if len(data) > 0x40 and data[:2] != b"MZ":
             e = struct.unpack("<I", data[0x3C:0x40])[0]
             if data[e:e + 4] == b"PE\0\0":
@@ -231,7 +243,7 @@ def triage(src):
                 tags.append(f"broken MZ header, repaired copy: agent/{fx.name}")
         if shutil.which("diec") and re.search(r"PE32|ELF|Mach-O|MS-DOS", ft):
             try:
-                die = subprocess.run(["diec", str(f)], capture_output=True, text=True, timeout=60).stdout.strip()
+                die = ANSI.sub("", subprocess.run(["diec", str(f)], capture_output=True, text=True, timeout=60).stdout).strip()
                 tags += [f"DIE: {l.strip()}" for l in die.splitlines()[1:8] if l.strip()]
             except (subprocess.TimeoutExpired, OSError):
                 pass
@@ -945,7 +957,13 @@ def loop(job, cfg, prompt, t0, extra):
 def report(job, cfg, why):
     m = meta(job)
     ans = (m / "ANSWER").read_text().strip() if (m / "ANSWER").exists() else ""
-    status = "solved" if ans else f"not solved ({why or 'agent gave up'})"
+    help_md = job / "HELP.md"
+    if ans:
+        status = "solved"
+    elif help_md.exists():
+        status = "stopped: human input needed (see HELP.md)"
+    else:
+        status = f"not solved ({why or 'agent gave up'})"
     if cfg["mode"] == "hint":
         status = "hints ready" if (m / "DONE").exists() else status
     if cfg["mode"] == "tutor":
@@ -970,6 +988,9 @@ def report(job, cfg, why):
         body = f"Chat with the tutor: `easyre tutor {job.name}`. The conversation is saved in `tutor.md`. Agent notes (`agent/notes.md`, `.easyre/`) contain the solution: avoid them until you are done.\n"
     elif cfg["mode"] == "hint":
         body = "Hints are in `hints.md`. Agent notes (`notes.md`, `log.jsonl`) contain the solution: avoid them until you are done.\n"
+    elif not ans and help_md.exists():
+        notes = (job / "agent" / "notes.md").read_text() if (job / "agent" / "notes.md").exists() else ""
+        body = "## Human input needed\n\n" + help_md.read_text() + ("\n## Agent notes\n\n" + notes if notes else "")
     elif not body.strip() and (job / "agent" / "notes.md").exists():
         body = "## Agent notes\n\n" + (job / "agent" / "notes.md").read_text()
     (job / "report.md").write_text("\n".join(head) + "\n\n---\n" + body)
