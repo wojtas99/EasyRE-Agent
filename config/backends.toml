@@ -3,18 +3,22 @@ default = "claude-opus"
 # Optional per profile: price_in / price_out = USD per 1M input / output tokens.
 # `easyre stats` uses them to show costs for API models.
 # Example:  price_in = 0.27   price_out = 1.10
+#
+# Claude models use full IDs, so every job runs on a known version. Update them
+# when a new model comes out. The aliases opus / sonnet / haiku also work and
+# always pick the newest model of that family.
 
 [profiles.claude-opus]
 backend = "claude"
-model = "opus"
+model = "claude-opus-5-5"
 
 [profiles.claude-sonnet]
 backend = "claude"
-model = "sonnet"
+model = "claude-sonnet-5-5"
 
 [profiles.claude-haiku]
 backend = "claude"
-model = "haiku"
+model = "claude-haiku-5-5"
 
 [profiles.openai-api]
 backend = "openai"

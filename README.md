@@ -31,7 +31,7 @@ EasyRE-Agent runs an AI agent inside a Docker container. The container holds you
 | ⏱️ | **Budgets** | Time and token limits per job |
 | 🔁 | **Resumable** | Continue a job later with more time or a different model |
 | 🔎 | **Triage** | File types, runtimes and packers detected up front |
-| 📄 | **Reports** | Answer, solution path, scripts, dead ends, time and tokens |
+| 📄 | **Reports** | Answer, solution path, scripts, dead ends, exact model, time and tokens |
 | 🧰 | **Your toolchain** | Plug-in install script plus Markdown skills (playbooks) the agent reads on demand |
 
 ---
@@ -229,6 +229,105 @@ The conversation is saved to `tutor.md` in the job folder. If a reply accidental
 3. If only `--success` is set and the task has exactly one `.exe` or ELF file, that file is run automatically with the candidate on stdin (through Wine for `.exe`).
 4. With no verifier, the agent must prove the answer itself, and the report marks it `unverified`.
 
+### 🔧 Commands the agent uses
+
+`easyre --help` also lists two commands marked `(agent)`. The agent runs them inside the job's container; you do not need them:
+
+| Command | What it does |
+|---|---|
+| `easyre check '<answer>'` | Runs the verifier above on a candidate. Exit 0 = accepted: the answer is stored in the job and the agent writes the report. Any other exit = rejected, and the agent keeps working. Every attempt is logged in `.easyre/attempts.log`. |
+| `easyre done` | Hint mode only: confirms `hints.md` has enough sections and does not contain the answer, then marks the hints as finished. |
+
+Run from your own console, they only print a note, because there is no job to check against. Use `easyre jobs` and `easyre open` to see results.
+
+---
+
+## 🔬 How a job runs: a crackme, step by step
+
+The example is a console crackme that asks for a serial and prints `Correct!` or `Wrong`:
+
+```
+tasks/keygenme/keygenme.exe
+tasks/keygenme/task.md        Find the valid serial.
+```
+
+```powershell
+.\easyre.cmd run keygenme --success "Correct"
+```
+
+Steps 1–3 and 5–7 are fixed code in `easyre`. Step 4 is what a model typically does: it is not scripted. The model picks its tools itself, guided by the skills and the rules in `config/AGENT.md`.
+
+**1. Start.** `easyre.cmd` runs `docker compose run --rm easyre easyre run …` in a fresh container. `tasks/` and `jobs/` are mounted, and so are `easyre`, `config/` and `skills/` (live, so edits need no rebuild).
+
+**2. Job setup.**
+- Creates `jobs/keygenme-<timestamp>/` with `src/` (a copy of the task, archives extracted), `agent/` and `.easyre/`.
+- Takes the description from `task.md` (or `opis.txt`, `README.md`).
+- Links the job as `/work`, the agent's working directory.
+- Picks the verifier: `--success` is set and the task has exactly one `.exe`, so the verifier is `wine /work/src/keygenme.exe`, with the candidate on stdin.
+
+**3. Triage.** For every file: `file`, byte markers (PyInstaller, .NET, UPX, Go, Rust, Delphi, AutoIt, WASM, Electron, …), repair of a broken `MZ` header, and `diec`. On the main native binary, the Ghidra prefetch starts in the background. It writes `functions.txt`, `strings.txt`, `imports.txt`, `decompiled.c` and finally `DONE` to `agent/prefetch/`. The result goes into `triage.md`:
+
+```
+- keygenme.exe (48213 B): PE32 executable (console) Intel 80386, for MS Windows
+  - DIE: Compiler: MinGW
+Background Ghidra analysis of `keygenme.exe` started -> /work/agent/prefetch/ ...
+```
+
+**4. The agent works.** It gets instructions (the rules from `AGENT.md`, the report format for its mode, the list of skills, the toolchain notes and this job's verifier) and a prompt with the task description and the triage. With the Claude backend, easyre runs `claude -p --output-format stream-json --model claude-opus-5-5 …` and logs every event to `.easyre/log.jsonl`. A typical run:
+
+| | What the agent does | Tools |
+|---|---|---|
+| a | Reads the general plan, then the skill for this kind of target | `re-methodology` → `native-binaries`, `ghidra-headless` |
+| b | Runs the program once | `printf 'test\n' \| wine /work/src/keygenme.exe` → `Wrong` |
+| c | Finds the success and failure strings | `strings -n 6`, `strings -el`, `agent/prefetch/strings.txt` |
+| d | Finds the function that checks the input | `grep -n Correct agent/prefetch/decompiled.c` |
+| e | Reads the check, and the disassembly when the C looks wrong | `decompiled.c`, `objdump -d -M intel`, `r2` |
+| f | Pulls the constants out of the file instead of guessing | `xxd` at the offset, or the bytes from Ghidra |
+| g | Records findings and dead ends | `agent/notes.md`: `hypothesis \| evidence \| result` |
+| h | Solves it the cheapest way | an inversion in Python (`agent/solve.py`); `z3` for tangled constraints; `unicorn`, `angr`, `WINEDEBUG=+relay` or `winedbg` when running beats reading |
+| i | Confirms the candidate on the real program | `printf 'SERIAL\n' \| wine keygenme.exe` → `Correct!` |
+| j | Submits the answer | `easyre check 'SERIAL'` |
+| k | Writes the report | `/work/report.md` |
+
+Steps e–h on this example. The decompiled check:
+
+```c
+if (strlen(s) != 12) return 0;
+for (i = 0; i < 12; i++)
+    if (((s[i] ^ 0x5A) + i) != expected[i]) return 0;
+return 1;
+```
+
+The agent reads `expected` from `.rdata` and inverts the check:
+
+```python
+exp = bytes.fromhex("1b2a3c...")
+print(bytes(((e - i) & 0xff) ^ 0x5A for i, e in enumerate(exp)).decode())
+```
+
+Other targets change only the skill in step a and the tools: UPX → `upx -d`; .NET / Unity → `ilspycmd`, `de4dot`, `il2cppdumper`; PyInstaller → `pyinstxtractor-ng` + `pycdc`; APK / JAR → `jadx`, `apktool`, `cfr`; Electron → `asar` + `webcrack`; AutoIt → `autoit-ripper`; WebAssembly → `wasm-decompile` + Node; crypto → `capa`, `yara`, `pycryptodome`; a custom VM → handler map → disassembler → `z3`.
+
+**5. Verification.** `easyre check` runs the verifier (see [✅ How verification works](#-how-verification-works)). Here it runs `wine /work/src/keygenme.exe` with the candidate on stdin (up to 120 s) and matches the output against `Correct`. Accepted: the answer is stored in `.easyre/ANSWER` and the agent is told to write the report. Rejected: the agent keeps working. Every attempt is logged in `.easyre/attempts.log`.
+
+**6. Guard rails.**
+- **Stop hook:** if the agent tries to stop without an accepted answer, a hook sends it back to work (up to 30 times). The only early exit is writing `HELP.md` when a human is really needed.
+- **Resume loop:** if the model process exits, easyre resumes the same session (up to 12 times). It waits 15 minutes on a rate limit, and starts a fresh session if the old one is gone; files and notes stay.
+- **Budget:** 120 minutes by default (`--budget-min`), plus an optional token limit (`--budget-tokens`). When it runs out, the report says `not solved (time)`.
+- **Ctrl+C** stops the job with a report; `easyre resume keygenme` continues it.
+
+**7. Result.** easyre puts a header on top of the agent's `report.md`: status, backend and exact model, time, tokens, cost, and the answer with its check result. `easyre open` opens it.
+
+```
+jobs/keygenme-20261030-201500/
+├── report.md     the result
+├── TASK.md
+├── src/          the task, never modified
+├── agent/        notes.md, solve.py, prefetch/, patched copies
+└── .easyre/      job.json, triage.md, log.jsonl, attempts.log, ANSWER
+```
+
+In hint and tutor mode, steps 1–5 are the same: the model solves the task first, but the answer goes to a private `.easyre/answer`. Then it writes graded hints (`hints.md`, checked by `easyre done`) or starts the tutor chat.
+
 ---
 
 ## 🤖 Backends
@@ -260,7 +359,7 @@ default = "claude-opus"
 
 [profiles.claude-opus]
 backend = "claude"
-model = "opus"
+model = "claude-opus-5-5"
 
 [profiles.ollama-qwen]
 backend = "openai"
@@ -284,6 +383,8 @@ api_key_env = "OPENROUTER_API_KEY"
 - `easyre profiles` lists the profiles; `*` marks the default.
 - `run ... --profile ollama-qwen` uses a local model.
 - `resume ... --profile claude-opus` continues the same job with a stronger model.
+
+**Which exact model?** The Claude profiles use full model IDs (`claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`), so every job runs on a known version. When a new model comes out, change the ID in `config/backends.toml`. To always follow the newest model instead, use an alias: `model = "opus"` (or `sonnet`, `haiku`). Either way, the exact model the backend reported is saved per job and shown in `easyre jobs`, `easyre stats`, the report header and, as `last run`, in `easyre profiles`.
 
 `api_key_env` reads the key from `.env`, so secrets stay out of the profile file. If you omit `--profile`, the `default` profile is used, or `EASYRE_PROFILE` if it is set in `.env`. Passing `--backend` without `--profile` skips the profiles and uses the backend directly.
 

@@ -23,7 +23,7 @@ run/resume options:
   --verify CMD                     command that checks a candidate ({} = candidate, otherwise sent on stdin)
   --profile NAME                   model profile from config/backends.toml
   --backend claude|codex|openai    default: claude
-  --model NAME                     backend model (claude: opus/sonnet, codex: gpt-..., openai: any)
+  --model NAME                     backend model (claude: claude-opus-5-5 or alias opus, codex: gpt-..., openai: any)
   --mode solve|hint|tutor          default: solve
   --budget-min N                   wall clock budget in minutes (default 120)
   --budget-tokens N                token budget (default: none)
@@ -449,10 +449,27 @@ def read_events(p, cfg, parse):
     return fail
 
 
+def note_model(cfg, name):
+    name = str(name or "").strip()
+    if not name or name.startswith("<"):
+        return
+    seen = cfg.setdefault("models_used", [])
+    if name not in seen:
+        seen.append(name)
+        log(f"model: {name}")
+    cfg["model_used"] = name
+
+
+def shown_model(c):
+    return c.get("model_used") or c.get("model") or "-"
+
+
 def parse_claude(ev, cfg):
     t = ev.get("type", "")
-    if t == "system" and ev.get("subtype") == "init" and not cfg.get("session"):
-        cfg["session"] = ev.get("session_id")
+    if t == "system" and ev.get("subtype") == "init":
+        note_model(cfg, ev.get("model"))
+        if not cfg.get("session"):
+            cfg["session"] = ev.get("session_id")
     if t == "assistant":
         m = ev.get("message") or {}
         u = m.get("usage") or {}
@@ -591,6 +608,7 @@ def backend_openai(cfg, prompt, t0, extra):
             log("api error:", msg[:300])
             return classify(msg), ""
         u = resp.get("usage") or {}
+        note_model(cfg, resp.get("model"))
         cfg["tokens"] += int(u.get("completion_tokens") or 0)
         cfg["tokens_in"] = cfg.get("tokens_in", 0) + int(u.get("prompt_tokens") or 0)
         m = resp["choices"][0]["message"]
@@ -674,13 +692,24 @@ def profiles(_):
         print("no profiles; add them to config/backends.toml")
         return 0
     d = os.environ.get("EASYRE_PROFILE") or data.get("default")
+    last = {}
+    for j in all_jobs():
+        c = jload(meta(j) / "job.json") or {}
+        if c.get("profile") and c.get("model_used"):
+            ts = (meta(j) / "job.json").stat().st_mtime
+            if ts >= last.get(c["profile"], (0, ""))[0]:
+                last[c["profile"]] = (ts, c["model_used"])
     for n, p in profs.items():
         where = p.get("base_url", "")
         m = p.get("model") or ""
         if n == d and os.environ.get("EASYRE_MODEL"):
             m = f"{os.environ['EASYRE_MODEL']} (EASYRE_MODEL)"
-        print(f"{'*' if n == d else ' '} {n:24} {p.get('backend', 'claude'):7} {m:32} {where}")
+        line = f"{'*' if n == d else ' '} {n:24} {p.get('backend', 'claude'):7} {m:32} {where}".rstrip()
+        if n in last:
+            line += f"   (last run: {last[n][1]})"
+        print(line)
     print("\n* = default. Use: easyre run TASK --profile NAME")
+    print("Full IDs such as claude-opus-5-5 pin a version; aliases such as opus pick the newest one. 'last run' is the exact model your latest job used.")
     return 0
 
 
@@ -923,7 +952,9 @@ def report(job, cfg, why):
         status = "tutor ready" if (m / "answer").exists() else status
     head = [f"# {cfg['name']} - EasyRE report", "",
             f"- Status: **{status}**",
-            f"- Backend: {cfg['backend']} {cfg.get('model') or ''}", f"- Mode: {cfg['mode']}",
+            f"- Backend: {cfg['backend']}" + (f" (requested model: {cfg['model']})" if cfg.get("model") else ""),
+            f"- Model: {', '.join(cfg.get('models_used') or []) or 'not reported by the backend'}",
+            f"- Mode: {cfg['mode']}",
             f"- Time: {cfg['elapsed_s'] // 60} min {cfg['elapsed_s'] % 60} s",
             f"- Tokens: {cfg['tokens']} out / {cfg.get('tokens_in', 0)} in (uncached)"]
     if cfg.get("cost_usd"):
@@ -964,7 +995,13 @@ def verify(cfg, cand):
     return ("correct" if good else "incorrect"), out.strip()[-800:]
 
 
+AGENT_ONLY = ("`easyre {}` is used by the agent inside a running job, not from your console. "
+              "To see results use `easyre jobs` or `easyre open JOB`.")
+
+
 def check(argv):
+    if not meta().is_dir():
+        sys.exit(AGENT_ONLY.format("check"))
     if not argv:
         sys.exit("usage: easyre check '<answer>'")
     cand = argv[-1]
@@ -991,6 +1028,8 @@ def check(argv):
 
 
 def done(_):
+    if not meta().is_dir():
+        sys.exit(AGENT_ONLY.format("done"))
     h = WORK / "hints.md"
     if not (meta() / "answer").exists():
         print("no verified answer yet: run `easyre check '<answer>'` first")
@@ -1065,13 +1104,13 @@ def jobs(_):
     if not js:
         print("no jobs yet. Start one: easyre run <task>")
         return 0
-    print(f"{'JOB':45} {'STATUS':7} {'BACKEND':7} {'MODE':5} {'TIME':>6} {'TOKENS':>13}")
+    print(f"{'JOB':45} {'STATUS':7} {'BACKEND':7} {'MODEL':24} {'MODE':5} {'TIME':>6} {'TOKENS':>13}")
     for d in js:
         c = jload(meta(d) / "job.json") or {}
         st = job_status(d)
         stc = {"solved": "green", "hints": "green", "tutor": "green", "open": "yellow", "closed": "blue"}.get(st)
         e = int(c.get("elapsed_s", 0))
-        print(f"{d.name:45} {paint(f'{st:7}', stc) if stc else f'{st:7}'} {c.get('backend', ''):7} {c.get('mode', ''):5} {e // 60:>3}:{e % 60:02d} {c.get('tokens', 0):>9} tok")
+        print(f"{d.name:45} {paint(f'{st:7}', stc) if stc else f'{st:7}'} {c.get('backend', ''):7} {shown_model(c)[:24]:24} {c.get('mode', ''):5} {e // 60:>3}:{e % 60:02d} {c.get('tokens', 0):>9} tok")
     return 0
 
 
@@ -1221,7 +1260,7 @@ def stats(_):
     rows = {}
     for d in all_jobs():
         c = jload(meta(d) / "job.json") or {}
-        key = c.get("profile") or f"{c.get('backend', '?')}:{c.get('model') or '-'}"
+        key = (c.get("profile") or c.get("backend", "?"), shown_model(c))
         r = rows.setdefault(key, {"jobs": 0, "done": 0, "time": 0, "out": 0, "in": 0, "cost": 0.0, "known": True})
         r["jobs"] += 1
         r["done"] += job_status(d) in ("solved", "hints", "tutor")
@@ -1236,14 +1275,14 @@ def stats(_):
     if not rows:
         print("no jobs yet")
         return 0
-    print(f"{'PROFILE':26} {'JOBS':>4} {'DONE':>4} {'TIME':>7} {'TOKENS OUT':>11} {'TOKENS IN':>11} {'COST':>9}")
+    print(f"{'PROFILE':18} {'MODEL':24} {'JOBS':>4} {'DONE':>4} {'TIME':>7} {'TOKENS OUT':>11} {'TOKENS IN':>11} {'COST':>9}")
     tot = {"jobs": 0, "done": 0, "time": 0, "out": 0, "in": 0, "cost": 0.0}
     for k, r in sorted(rows.items()):
         cost = fmt_cost(r["cost"]) + ("" if r["known"] else "*")
-        print(f"{k:26} {r['jobs']:>4} {r['done']:>4} {fmt_time(r['time']):>7} {r['out']:>11,} {r['in']:>11,} {cost:>9}")
+        print(f"{k[0][:18]:18} {k[1][:24]:24} {r['jobs']:>4} {r['done']:>4} {fmt_time(r['time']):>7} {r['out']:>11,} {r['in']:>11,} {cost:>9}")
         for x in tot:
             tot[x] += r[x]
-    print(f"{'TOTAL':26} {tot['jobs']:>4} {tot['done']:>4} {fmt_time(tot['time']):>7} {tot['out']:>11,} {tot['in']:>11,} {fmt_cost(tot['cost']):>9}")
+    print(f"{'TOTAL':43} {tot['jobs']:>4} {tot['done']:>4} {fmt_time(tot['time']):>7} {tot['out']:>11,} {tot['in']:>11,} {fmt_cost(tot['cost']):>9}")
     print("\nCOST for Claude is the API-equivalent price (a subscription costs nothing extra).")
     print("* = cost unknown for some jobs: add price_in / price_out (USD per 1M tokens) to the profile in config/backends.toml.")
     return 0
@@ -1302,7 +1341,7 @@ def main():
             if getattr(args, k) is None:
                 setattr(args, k, v)
         if args.model is None:
-            args.model = os.environ.get("EASYRE_MODEL") or ({"claude": "opus"}.get(args.backend))
+            args.model = os.environ.get("EASYRE_MODEL") or ({"claude": "claude-opus-5-5"}.get(args.backend))
         job, cfg = prepare(args)
         cfg["profile"] = prof
         cfg["logs"] = args.logs
