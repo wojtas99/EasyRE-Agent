@@ -421,7 +421,7 @@ Skills are Markdown playbooks in `skills/<name>/SKILL.md`. The agent sees the li
 | 🗂️ | `formats-forensics` | Documents, archives, images, captures, custom formats | ✅ |
 | 🐉 | `ghidra-headless` | Ghidra without the GUI (headless scripts) | ✅ |
 
-✅ ready · 🚧 in progress
+All skills listed above are ready to use.
 
 To add a skill, copy `skills/_TEMPLATE.md` to `skills/<name>/SKILL.md`. It appears to the agent automatically.
 
@@ -515,6 +515,47 @@ docker-compose.yml     volumes: tasks/, jobs/, live-mounted easyre, config/, ski
 `easyre`, `config/` and `skills/` are mounted live, so edits take effect without rebuilding.
 
 ---
+
+## 🤝 Contributing
+
+Contributions are welcome: new skills, new toolchain modules, better triage, bug fixes. EasyRE-Agent is for crackmes, CTF reversing and puzzle binaries; please keep contributions within that educational scope.
+
+### Getting set up
+
+1. Fork and clone the repo, then run the setup once (`setup.cmd` / `sh setup.sh`).
+2. `easyre`, `config/` and `skills/` are mounted into the container live, so edits to them take effect on the next `easyre run` with no rebuild. Changes under `toolchain/` or the `Dockerfile` need `docker compose build`.
+3. After a change, run `easyre doctor`: it checks the profile, Wine, every toolchain group, the prefetch hook and the skills, and flags what is missing.
+
+### Add a skill
+
+A skill is a Markdown playbook the agent loads when it matches the target.
+
+1. Copy `skills/_TEMPLATE.md` to `skills/<name>/SKILL.md`.
+2. Fill in the front matter (`name` must equal the folder name) and the sections: **When to use**, **Steps**, **Tools and commands**, **Pitfalls**, **Verification**.
+3. Reference only tools a module actually installs, and name that module in *When to use* so the agent can pull it in if it is missing.
+4. The skill shows up to the agent automatically; no code change is needed, and `easyre doctor` will count it.
+
+### Add a toolchain module
+
+1. Add `toolchain/modules/<name>.sh`. Keep it **standalone and idempotent** (safe to re-run mid-job), end it with a short self-test that prints `[x] <tool>` / `[ ] <tool>`, and resolve the latest upstream release instead of hardcoding a version that will rot.
+2. Add a `COPY` + `RUN sh /opt/easyre/toolchain/install.sh <name>` pair in the `Dockerfile` (one layer per module; put heavy, stable ones earlier so a later failure does not rebuild them).
+3. List it in `toolchain/README.md` (the matrix the agent reads), the module table and disk estimates in this README, the `EASYRE_TOOLS` options line in `.env.example`, and the matching group in `doctor()` in `easyre`.
+4. `EASYRE_TOOLS=all` picks it up automatically; a subset in `.env` can still select it by name.
+
+### Add a triage marker
+
+Markers live in the `MARKERS` list in `easyre` as `(signature, kind, label, mode)`. `mode` is `any` (anywhere in the file), `start` (a real file magic: leading bytes only) or `weak` (counts only when a strong marker already produced the same label). Prefer `start` for magics and `weak` for common-but-ambiguous strings, so large binaries do not pick up false tags.
+
+### Conventions
+
+- **Line endings are LF.** `.gitattributes` enforces it; shell scripts and `easyre` break in the Linux container if they get CRLF.
+- `easyre` is a single, stdlib-only Python file. Keep it dependency-free.
+- Before a PR: `sh -n` your shell scripts, `python3 -c "import ast; ast.parse(open('easyre').read())"`, and `easyre doctor`. If you can, solve one of your own crackmes end to end.
+- `tasks/`, `jobs/` and `.env` are gitignored. Do not commit challenge binaries, task files or secrets.
+
+### Reporting issues
+
+Open an issue with the target type, the command you ran, the triage output and the tail of `.easyre/log.jsonl`. Do not attach copyrighted or third-party challenge binaries.
 
 ## ⚠️ Security
 
