@@ -50,11 +50,12 @@ COPY toolchain/README.md /opt/easyre/toolchain/README.md
 COPY config/ /opt/easyre/config/
 COPY skills/ /opt/easyre/skills/
 COPY easyre /usr/local/bin/easyre
+COPY toolchain/dump-mem /opt/easyre/tools/dump-mem
 RUN mkdir -p /opt/easyre/tools /root/.claude /root/.agents /state/codex /tasks /jobs && \
     cp /opt/easyre/config/claude-settings.json /root/.claude/settings.json && \
     echo '{"hasCompletedOnboarding": true}' > /root/.claude.json && \
     ln -sfn /opt/easyre/skills /root/.claude/skills && ln -sfn /opt/easyre/skills /root/.agents/skills && \
-    chmod +x /usr/local/bin/easyre /opt/easyre/config/*.sh && \
+    chmod +x /usr/local/bin/easyre /opt/easyre/config/*.sh /opt/easyre/tools/dump-mem && \
     claude --version && codex --version
 
 WORKDIR /jobs

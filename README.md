@@ -305,7 +305,7 @@ exp = bytes.fromhex("1b2a3c...")
 print(bytes(((e - i) & 0xff) ^ 0x5A for i, e in enumerate(exp)).decode())
 ```
 
-Other targets change only the skill in step a and the tools: UPX → `upx -d`; .NET / Unity → `ilspycmd`, `de4dot`, `il2cppdumper`; PyInstaller → `pyinstxtractor-ng` + `pycdc`; APK / JAR → `jadx`, `apktool`, `cfr`; Electron → `asar` + `webcrack`; AutoIt → `autoit-ripper`; WebAssembly → `wasm-decompile` + Node; crypto → `capa`, `yara`, `pycryptodome`; a custom VM → handler map → disassembler → `z3`.
+Other targets change only the skill in step a and the tools: UPX → `upx -d`; a simple or custom packer → run to the OEP and `dump-mem`; .NET / Unity → `ilspycmd`, `de4dot`, `il2cppdumper`; PyInstaller → `pyinstxtractor-ng` + `pycdc`; APK / JAR → `jadx`, `apktool`, `cfr`; Electron → `asar` + `webcrack`; AutoIt → `autoit-ripper`; WebAssembly → `wasm-decompile` + Node; crypto → `capa`, `yara`, `pycryptodome`; a custom VM → handler map → disassembler → `z3`.
 
 **5. Verification.** `easyre check` runs the verifier (see [✅ How verification works](#-how-verification-works)). Here it runs `wine /work/src/keygenme.exe` with the candidate on stdin (up to 120 s) and matches the output against `Correct`. Accepted: the answer is stored in `.easyre/ANSWER` and the agent is told to write the report. Rejected: the agent keeps working. Every attempt is logged in `.easyre/attempts.log`.
 
@@ -416,6 +416,7 @@ Skills are Markdown playbooks in `skills/<name>/SKILL.md`. The agent sees the li
 | 🕸️ | `wasm` | WebAssembly modules | ✅ |
 | 🎰 | `custom-vm` | Custom VMs and bytecode interpreters | ✅ |
 | 🍷 | `dynamic-wine` | Running and observing Windows programs under Wine | ✅ |
+| 📦 | `unpacking` | Packed/protected binaries: unpack a copy, dump from memory at the OEP | ✅ |
 | 🧮 | `solvers` | Constraint solving, symbolic execution, emulation | ✅ |
 | 🔐 | `crypto-id` | Recognizing crypto and encoding primitives | ✅ |
 | 🗂️ | `formats-forensics` | Documents, archives, images, captures, custom formats | ✅ |

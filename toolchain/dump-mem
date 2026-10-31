@@ -1,0 +1,183 @@
+#!/usr/bin/env python3
+"""dump-mem - reconstruct a PE from a running process's memory (unpacking).
+
+  dump-mem <pid> -o OUT [--oep ADDR] [--base ADDR] [--module NAME] [--stop]
+
+Most "packed" crackmes are UPX (just `upx -d -o out.exe packed.exe`) or a
+simple/custom packer that decrypts the real program into memory at run time and
+jumps to its original entry point (OEP). Once execution reaches the OEP the
+unpacked image is sitting in memory; this tool reads it back out of
+`/proc/<pid>/mem` and writes a normal PE whose sections are laid out the way the
+loader had them (raw offset = virtual address), so Ghidra / objdump / strings
+can read it statically.
+
+Typical flow (see the `unpacking` and `dynamic-wine` skills):
+
+  1. Run the target under Wine and stop it at the OEP: a gdb breakpoint on the
+     OEP, or stop on the first jump into a freshly written section.
+  2. With it stopped, find the Wine pid and dump:
+       pid=$(pgrep -f app.exe | tail -1)
+       dump-mem "$pid" --oep 0x401abc -o /work/agent/unpacked.exe
+  3. Read the dump statically. If it must *run*, the import table (IAT) usually
+     still needs rebuilding - this tool does not do that; for reading the logic
+     the raw dump is enough.
+
+The process must be stopped while it is read: a gdb breakpoint holds it, or pass
+--stop to SIGSTOP it around the read (do not use --stop while gdb owns it).
+Reading another process's memory needs root / CAP_SYS_PTRACE, which the
+container has (see docker-compose.yml).
+"""
+import argparse, os, re, signal, struct, sys, time
+
+
+def log(*a):
+    print("dump-mem:", *a, file=sys.stderr)
+
+
+def read_range(pid, addr, size):
+    """Read [addr, addr+size) from the process, zero-filling unreadable pages."""
+    if size <= 0:
+        return b""
+    with open(f"/proc/{pid}/mem", "rb", 0) as f:
+        try:
+            f.seek(addr)
+            data = f.read(size)
+            if len(data) == size:
+                return data
+        except OSError:
+            pass
+        buf = bytearray(size)
+        p = 0
+        while p < size:
+            n = min(0x1000, size - p)
+            try:
+                f.seek(addr + p)
+                d = f.read(n)
+            except OSError:
+                d = b""
+            if d:
+                buf[p:p + len(d)] = d
+            p += n
+        return bytes(buf)
+
+
+def maps(pid):
+    rows = []
+    for line in open(f"/proc/{pid}/maps"):
+        m = re.match(r"([0-9a-f]+)-([0-9a-f]+)\s+(\S+)\s+\S+\s+\S+\s+\S+\s*(.*)", line)
+        if m:
+            rows.append((int(m.group(1), 16), int(m.group(2), 16), m.group(3), m.group(4).strip()))
+    return rows
+
+
+def looks_like_pe(pid, addr):
+    hdr = read_range(pid, addr, 0x400)
+    if len(hdr) < 0x40 or hdr[:2] != b"MZ":
+        return False
+    off = struct.unpack_from("<I", hdr, 0x3c)[0]
+    return 0 < off < len(hdr) - 4 and hdr[off:off + 4] == b"PE\x00\x00"
+
+
+def find_base(pid, module):
+    rows = maps(pid)
+    want = (module or ".exe").lower()
+    cands = sorted({s for (s, e, p, path) in rows if path and want in os.path.basename(path).lower()})
+    for base in cands:
+        if looks_like_pe(pid, base):
+            return base
+    for (s, e, p, path) in rows:
+        if looks_like_pe(pid, s):
+            return s
+    return None
+
+
+def rebuild(pid, base, oep):
+    hdr = read_range(pid, base, 0x1000)
+    if hdr[:2] != b"MZ":
+        sys.exit(f"no MZ header at base {base:#x}; pass --base (e.g. 0x400000)")
+    e_lfanew = struct.unpack_from("<I", hdr, 0x3c)[0]
+    if hdr[e_lfanew:e_lfanew + 4] != b"PE\x00\x00":
+        sys.exit("PE signature not found in the headers at this base")
+    coff = e_lfanew + 4
+    nsec = struct.unpack_from("<H", hdr, coff + 2)[0]
+    sizeopt = struct.unpack_from("<H", hdr, coff + 16)[0]
+    opt = coff + 20
+    magic = struct.unpack_from("<H", hdr, opt)[0]
+    secalign = struct.unpack_from("<I", hdr, opt + 32)[0]
+    sizeimg = struct.unpack_from("<I", hdr, opt + 56)[0]
+    sizehdrs = struct.unpack_from("<I", hdr, opt + 60)[0]
+    sectab = opt + sizeopt
+    if secalign == 0:
+        sys.exit("SectionAlignment is 0; the headers look wrong (bad --base?)")
+    need = max(sizehdrs, sectab + nsec * 40)
+    if need > len(hdr):
+        hdr = read_range(pid, base, (need + 0xfff) & ~0xfff)
+
+    img = bytearray(sizeimg)
+    img[:min(sizehdrs, len(img))] = hdr[:min(sizehdrs, len(img))]
+    secs = []
+    for i in range(nsec):
+        sh = sectab + i * 40
+        name = hdr[sh:sh + 8].rstrip(b"\x00").decode("latin1", "replace")
+        vsize = struct.unpack_from("<I", hdr, sh + 8)[0]
+        vaddr = struct.unpack_from("<I", hdr, sh + 12)[0]
+        raw_aligned = (max(vsize, 1) + secalign - 1) & ~(secalign - 1)
+        data = read_range(pid, base + vaddr, vsize)
+        if vaddr + len(data) > len(img):
+            img += b"\x00" * (vaddr + len(data) - len(img))
+        img[vaddr:vaddr + len(data)] = data
+        struct.pack_into("<I", img, sh + 16, raw_aligned)   # SizeOfRawData
+        struct.pack_into("<I", img, sh + 20, vaddr)         # PointerToRawData
+        secs.append((name or f"sec{i}", vaddr, vsize))
+    struct.pack_into("<I", img, opt + 36, secalign)         # FileAlignment = SectionAlignment
+    if oep is not None:
+        struct.pack_into("<I", img, opt + 16, (oep - base) & 0xffffffff)  # AddressOfEntryPoint
+    return img, magic, secs, sizeimg
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="dump-mem", description="Dump an unpacked PE out of a running process's memory.")
+    ap.add_argument("pid", type=int, help="pid of the (stopped) process, e.g. $(pgrep -f app.exe | tail -1)")
+    ap.add_argument("-o", "--out", required=True, help="output PE path, e.g. /work/agent/unpacked.exe")
+    ap.add_argument("--oep", help="original entry point as seen in memory (hex ok); sets AddressOfEntryPoint")
+    ap.add_argument("--base", help="image base in memory (hex ok); skips auto-detection")
+    ap.add_argument("--module", help="substring of the module file name to dump (default: the mapped *.exe)")
+    ap.add_argument("--stop", action="store_true", help="SIGSTOP the process around the read (not while gdb owns it)")
+    a = ap.parse_args()
+
+    if not os.path.isdir(f"/proc/{a.pid}"):
+        sys.exit(f"no such process: {a.pid}")
+    oep = int(a.oep, 0) if a.oep else None
+    base = int(a.base, 0) if a.base else None
+
+    stopped = False
+    try:
+        if a.stop:
+            os.kill(a.pid, signal.SIGSTOP)
+            stopped = True
+            time.sleep(0.2)
+        if base is None:
+            base = find_base(a.pid, a.module)
+            if base is None:
+                sys.exit("could not locate the PE image in memory; pass --base (e.g. 0x400000)")
+        log(f"image base {base:#x}")
+        img, magic, secs, sizeimg = rebuild(a.pid, base, oep)
+        with open(a.out, "wb") as f:
+            f.write(img)
+    finally:
+        if stopped:
+            os.kill(a.pid, signal.SIGCONT)
+
+    kind = "PE32+" if magic == 0x20b else "PE32"
+    log(f"wrote {a.out} ({len(img)} B, {kind}, {len(secs)} sections, SizeOfImage {sizeimg:#x})")
+    for n, va, vs in secs:
+        log(f"  {n:<8} rva {va:#010x} vsize {vs:#x}")
+    if oep is not None:
+        log(f"entry set to OEP {oep:#x} (rva {(oep - base) & 0xffffffff:#x})")
+    else:
+        log("no --oep given: AddressOfEntryPoint left as the in-memory value (likely the packer stub)")
+    log("imports/IAT are NOT rebuilt - fine to read in Ghidra/objdump/strings; to make the dump run, rebuild the IAT.")
+
+
+if __name__ == "__main__":
+    main()

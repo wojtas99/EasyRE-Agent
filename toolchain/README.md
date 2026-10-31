@@ -138,3 +138,8 @@ WebAssembly modules. Node (base image) instantiates them and calls exports.
 ## Also in the base image (not a module)
 
 Python 3 + pip, Node.js, `7z`/`unzip`, `file`, `curl`, `git`, `jq`.
+
+`dump-mem` (at `/opt/easyre/tools/dump-mem`, on `PATH`): reconstruct an unpacked
+PE from a running process's memory - run a packed target to its OEP under Wine,
+then `dump-mem <pid> --oep <addr> -o out.exe`. Stdlib Python, no module needed.
+See the `unpacking` skill.

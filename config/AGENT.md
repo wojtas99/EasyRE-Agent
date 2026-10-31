@@ -17,7 +17,7 @@ The goal is always a specific answer (password, key, flag, serial) recovered by 
 - Evidence over guessing: pull constants, tables and keys from the target itself.
 - Prefer the cheapest path that answers the question: running or emulating the check often beats reading all of it.
 - Long jobs run in the background with output to a file under `/work/agent`; poll the file.
-- If your backend supports subagents and you are stuck for ~15 minutes, split into 2-3 lanes with genuinely different approaches, each in `/work/agent/lanes/<name>/`.
+- When one approach stalls (~15 min with no progress - common on large custom VMs and heavy obfuscation) and your backend supports subagents, fan out into lanes: run 2-3 in parallel, each a *genuinely different* attack (e.g. static-invert vs. symbolic/`angr` vs. dynamic-emulate), not the same idea three times. Give each its own `/work/agent/lanes/<name>/` and a one-line brief, and have each append findings to `agent/notes.md`. The first lane to a candidate that `easyre check` accepts wins; stop the others and fold their dead ends into the notes.
 
 ## Answer checking
 - `easyre check '<answer>'`: exit 0 = accepted, 1 = rejected (output says why).

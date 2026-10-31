@@ -1248,6 +1248,8 @@ def doctor(argv):
     print("       py      " + " ".join((CHK if have(mod) else DOT) + k for k, mod in pys))
     pf = CHK if (PREFETCH.exists() and os.access(PREFETCH, os.X_OK)) else DOT + " (install the ghidra module)"
     print(f"       prefetch hook: {pf}")
+    dm = shutil.which("dump-mem") or "/opt/easyre/tools/dump-mem"
+    print(f"       dump-mem helper: {CHK if (Path(dm).exists() and os.access(dm, os.X_OK)) else DOT}")
     names = skill_names()
     todo = [n for n in names if "TODO" in (SKILLS / n / "SKILL.md").read_text()]
     print(f"  ---  skills: {len(names)} installed, {len(names) - len(todo)} filled in, {len(todo)} still TODO")
