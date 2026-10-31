@@ -313,7 +313,7 @@ Other targets change only the skill in step a and the tools: UPX → `upx -d`; a
 - **Stop hook:** if the agent tries to stop without an accepted answer, a hook sends it back to work (up to 30 times). The only early exit is writing `HELP.md` when a human is really needed.
 - **Resume loop:** if the model process exits, easyre resumes the same session (up to 12 times). It waits 15 minutes on a rate limit, and starts a fresh session if the old one is gone; files and notes stay.
 - **Budget:** 120 minutes by default (`--budget-min`), plus an optional token limit (`--budget-tokens`). When it runs out, the report says `not solved (time)`.
-- **Ctrl+C** stops the job with a report; `easyre resume keygenme` continues it.
+- **Ctrl+C** stops the job with a report; `easyre resume keygenme` continues it. A Ghidra prefetch that had not finished restarts on resume.
 
 **7. Result.** easyre puts a header on top of the agent's `report.md`: status, backend and exact model, time, tokens, cost, and the answer with its check result. `easyre open` opens it.
 
@@ -461,6 +461,8 @@ prefetch <binary> <output_dir>
 ```
 
 It drives Ghidra headless to drop `decompiled.c`, `functions.txt`, `strings.txt` and `imports.txt` into `agent/prefetch/`, so the agent can start reading decompiled code immediately. Without the `ghidra` module the hook is simply absent and triage skips it.
+
+**Prefetch cache:** a finished prefetch is stored in the `easyre-state` volume under `/state/prefetch/<sha256>/`. A new job on the same binary (a re-run, another mode, another model) copies it instead of running Ghidra again, and `easyre doctor` shows how many binaries are cached. Set `EASYRE_PREFETCH_CACHE=0` in `.env` to turn it off; to clear it: `docker compose run --rm easyre rm -rf /state/prefetch`.
 
 ### 💾 Disk space
 

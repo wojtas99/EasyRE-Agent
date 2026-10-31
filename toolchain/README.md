@@ -64,6 +64,8 @@ Headless Ghidra, the JDK the release requires (installed and pinned automaticall
   installed, triage runs it in the background on the main native binary and
   drops `decompiled.c`, `functions.txt`, `strings.txt`, `imports.txt` into
   `/work/agent/prefetch/`. Read those first instead of re-analyzing.
+  A binary analysed in an earlier job comes from a cache
+  (`/state/prefetch/<sha256>/`), so `DONE` may already be there at the start.
 
 See the `ghidra-headless` skill.
 

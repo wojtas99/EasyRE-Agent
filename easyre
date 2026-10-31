@@ -31,7 +31,7 @@ run/resume options:
   --logs                           stream the agent's commands instead of a progress bar
   -i                               interactive (claude/codex TUI)
 """
-import argparse, json, tomllib, os, re, shutil, signal, struct, subprocess, sys, threading, time, urllib.request
+import argparse, hashlib, json, tomllib, os, re, shutil, signal, struct, subprocess, sys, threading, time, urllib.request
 from pathlib import Path
 
 TASKS = Path(os.environ.get("EASYRE_TASKS", "/tasks"))
@@ -175,6 +175,9 @@ def extract(f, dst):
 
 SKILLS = Path(os.environ.get("EASYRE_SKILLS", "/opt/easyre/skills"))
 PREFETCH = Path(os.environ.get("EASYRE_PREFETCH", "/opt/easyre/tools/prefetch"))
+# Finished prefetch runs, keyed by the SHA-256 of the binary. Lives in the
+# persistent /state volume, so a new job on the same binary skips Ghidra.
+PREFETCH_CACHE = STATE / "prefetch"
 # (signature, kind, label, mode). mode: "any" = anywhere in the file;
 # "start" = only as the file's leading bytes (a real file magic, not a
 # coincidental hit deep inside a big binary); "weak" = a signal too common to
@@ -255,13 +258,46 @@ def triage(src):
         lines.append(f"- ... {len(files) - 200} more files")
     if native and PREFETCH.exists() and os.access(PREFETCH, os.X_OK):
         f = max(native, key=lambda p: (p.suffix.lower() != ".dll", p.stat().st_size))
-        out = WORK / "agent" / "prefetch"
-        out.mkdir(parents=True, exist_ok=True)
-        subprocess.Popen([str(PREFETCH), str(f), str(out)], stdout=open(out / "prefetch.log", "w"),
-                         stderr=subprocess.STDOUT, start_new_session=True)
-        lines.append(f"\nBackground Ghidra analysis of `{f.name}` started -> /work/agent/prefetch/ "
+        (meta() / "prefetch_target").write_text(str(f.relative_to(src)) + "\n")
+        how = start_prefetch(f, WORK / "agent" / "prefetch")
+        lines.append(f"\nBackground Ghidra analysis of `{f.name}` {how} -> /work/agent/prefetch/ "
                      "(functions.txt, strings.txt, imports.txt, decompiled.c; DONE appears when finished; log prefetch.log)")
     return "\n".join(lines)
+
+
+def start_prefetch(f, out):
+    """Start the Ghidra prefetch of f into out, in the background. A binary
+    analysed before (same SHA-256) is copied from the cache instead."""
+    if out.exists():
+        shutil.rmtree(out)
+    out.mkdir(parents=True)
+    cmd = [str(PREFETCH), str(f), str(out)]
+    if os.environ.get("EASYRE_PREFETCH_CACHE", "1") != "0":
+        h = hashlib.sha256()
+        with open(f, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+        cache = PREFETCH_CACHE / h.hexdigest()
+        if (cache / "DONE").exists():
+            shutil.copytree(cache, out, dirs_exist_ok=True)
+            return "loaded from cache (already finished)"
+        cmd = ["sh", "-c", '"$0" "$1" "$2" && mkdir -p "${3%/*}" && rm -rf "$3.tmp" && '
+               'cp -a "$2" "$3.tmp" && rm -rf "$3" && mv "$3.tmp" "$3"', *cmd, str(cache)]
+    subprocess.Popen(cmd, stdout=open(out / "prefetch.log", "w"), stderr=subprocess.STDOUT, start_new_session=True)
+    return "started"
+
+
+def resume_prefetch(job):
+    """The prefetch dies with the container that ran it. On resume, restart
+    one that never wrote DONE, so the agent does not read a half-written
+    decompiled.c. Jobs from before prefetch_target existed are left alone."""
+    t = meta(job) / "prefetch_target"
+    out = job / "agent" / "prefetch"
+    if not t.exists() or (out / "DONE").exists() or not (PREFETCH.exists() and os.access(PREFETCH, os.X_OK)):
+        return
+    f = job / "src" / t.read_text().strip()
+    if f.is_file():
+        log(f"Ghidra prefetch of {f.name} had not finished: {start_prefetch(f, out)}")
 
 
 def auto_verify(src, success):
@@ -1248,6 +1284,9 @@ def doctor(argv):
     print("       py      " + " ".join((CHK if have(mod) else DOT) + k for k, mod in pys))
     pf = CHK if (PREFETCH.exists() and os.access(PREFETCH, os.X_OK)) else DOT + " (install the ghidra module)"
     print(f"       prefetch hook: {pf}")
+    nc = len(list(PREFETCH_CACHE.glob("*/DONE"))) if PREFETCH_CACHE.is_dir() else 0
+    print(f"       prefetch cache: {nc} binar{'y' if nc == 1 else 'ies'} in {PREFETCH_CACHE}"
+          + (" (off: EASYRE_PREFETCH_CACHE=0)" if os.environ.get("EASYRE_PREFETCH_CACHE") == "0" else ""))
     dm = shutil.which("dump-mem") or "/opt/easyre/tools/dump-mem"
     print(f"       dump-mem helper: {CHK if (Path(dm).exists() and os.access(dm, os.X_OK)) else DOT}")
     names = skill_names()
@@ -1387,6 +1426,7 @@ def main():
         if args.backend and args.backend != jload(meta(job) / "job.json").get("backend"):
             cfg["session"] = None
         jsave(meta(job) / "job.json", cfg)
+        resume_prefetch(job)
     if getattr(args, "logs", False):
         cfg["logs"] = True
     log(f"job {job.name}: profile={cfg.get('profile') or '-'} backend={cfg['backend']} model={cfg.get('model')} mode={cfg['mode']} budget={cfg['budget_min']} min")
