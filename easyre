@@ -31,7 +31,7 @@ run/resume options:
   --logs                           stream the agent's commands instead of a progress bar
   -i                               interactive (claude/codex TUI)
 """
-import argparse, hashlib, json, tomllib, os, re, shutil, signal, struct, subprocess, sys, threading, time, urllib.request
+import argparse, hashlib, json, mmap, tomllib, os, re, shutil, signal, struct, subprocess, sys, threading, time, urllib.request
 from pathlib import Path
 
 TASKS = Path(os.environ.get("EASYRE_TASKS", "/tasks"))
@@ -230,23 +230,38 @@ def triage(src):
     files = sorted(p for p in src.rglob("*") if p.is_file())
     for f in files[:200]:
         ft = subprocess.run(["file", "-b", str(f)], capture_output=True, text=True).stdout.strip()
+        # Scan the whole file via mmap (no RAM blow-up, no size cap): a marker
+        # near the end - an appended archive, a bundle manifest, PyInstaller's
+        # MEI - is as real as one at the start, and big targets are common.
+        mm = None
         try:
-            data = f.read_bytes()[: 96 << 20]
-        except OSError:
-            data = b""
+            fh = open(f, "rb")
+            if f.stat().st_size:
+                mm = mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ)
+        except (OSError, ValueError):
+            mm = None
+
+        def has(sig, mode):
+            if mm is None:
+                return False
+            return mm[:len(sig)] == sig if mode == "start" else mm.find(sig) != -1
+
         strong, weak = set(), set()
         for sig, kind, label, mode in MARKERS:
-            hit = data.startswith(sig) if mode == "start" else sig in data
-            if hit:
+            if has(sig, mode):
                 (weak if mode == "weak" else strong).add(f"{label} [{kind}]")
         tags = sorted(strong | (weak & strong))
-        if len(data) > 0x40 and data[:2] != b"MZ":
-            e = struct.unpack("<I", data[0x3C:0x40])[0]
-            if data[e:e + 4] == b"PE\0\0":
+        head = mm[:0x1000] if mm is not None else b""
+        if len(head) > 0x40 and head[:2] != b"MZ":
+            e = struct.unpack("<I", head[0x3C:0x40])[0]
+            if 0 <= e <= len(mm) - 4 and mm[e:e + 4] == b"PE\0\0":
                 fx = src.parent / "agent" / (f.stem + ".fixed.exe")
                 fx.parent.mkdir(exist_ok=True)
-                fx.write_bytes(b"MZ" + data[2:])
+                fx.write_bytes(b"MZ" + mm[2:])
                 tags.append(f"broken MZ header, repaired copy: agent/{fx.name}")
+        if mm is not None:
+            mm.close()
+            fh.close()
         if shutil.which("diec") and re.search(r"PE32|ELF|Mach-O|MS-DOS", ft):
             try:
                 die = ANSI.sub("", subprocess.run(["diec", str(f)], capture_output=True, text=True, timeout=60).stdout).strip()
