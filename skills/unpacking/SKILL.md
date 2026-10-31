@@ -1,6 +1,6 @@
 ---
 name: unpacking
-description: Packed or protected executables - recognise the packer, unpack a copy, and when there is no static unpacker, run to the original entry point (OEP) under Wine and dump the unpacked image out of memory with dump-mem. Load when triage/DIE says packed/protected or the on-disk file has tiny code and huge high-entropy data.
+description: Packed or protected executables - recognise the packer, unpack a copy, and when there is no static unpacker, run to the original entry point (OEP) under Wine and dump the unpacked image out of memory with dump-mem. For commercial virtualizing protectors (VMProtect, Themida) hand off to the `devirtualization` skill. Load when triage/DIE says packed/protected or the on-disk file has tiny code and huge high-entropy data.
 ---
 
 # unpacking
@@ -17,6 +17,7 @@ Do this *before* the file-type skill: unpack a copy into `agent/`, then analyse 
    - **UPX** (by far the most common): unpack statically, no running needed (see below).
    - **A known packer with a tool** (e.g. some .NET protectors - use `de4dot` via the `dotnet` skill).
    - **A simple or custom packer** with no static unpacker: unpack dynamically by dumping from memory at the OEP.
+   - **A commercial virtualizing protector** (triage tags `VMProtect` / `Themida` / `WinLicense`, or DIE says so): unpack the outer layer here (dump at OEP as below), then load the `devirtualization` skill for the virtualized code itself.
 2. **Try the cheap static path first.** `upx -d` handles UPX and some clones outright. If it works, you are done - analyse the unpacked copy.
 3. **If there is no static unpacker, dump from memory.** The idea: the stub decrypts the real code into memory and jumps to the original entry point (OEP). Run the target under Wine (`dynamic-wine`), stop it at the OEP, and read the unpacked image back out of the process with `dump-mem`.
 4. **Find the OEP.** It is the point where the stub hands control to the real program. Practical ways to catch it:
@@ -64,6 +65,7 @@ strings -n 6 /work/agent/unpacked.exe | grep -iE 'correct|wrong|flag|serial'
 - **Auto-detected base can be wrong** if several PE modules are mapped. Pass `--module packed.exe` or `--base` from `info proc mappings` in gdb.
 - **Self-checking/anti-debug packers** may detect gdb or refuse to run headless. If so, confirm the OEP with a `WINEDEBUG=+relay` trace or static reading of the stub instead, and dump on a plain `kill -STOP`.
 - Do not over-reach: if `upx -d` already gave you a clean file, there is nothing to dump.
+- A virtualizing protector (VMProtect/Themida) still has an outer pack/encrypt layer: dumping at the OEP here gives you the native parts and the VM structures, which is the starting point for the `devirtualization` skill - it is not the end of the road.
 
 ## Verification
 
