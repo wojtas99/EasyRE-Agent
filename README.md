@@ -476,7 +476,7 @@ Rough estimates, not measured:
 | Ubuntu base + Python + basic utilities | ~0.4 GB |
 | Node.js + Claude Code + Codex CLI | ~0.5 GB |
 | `wine` module (Wine 32/64 + Xvfb + prepared prefix + MinGW DLLs) | ~2 GB |
-| All other modules (`core`, `die`, `ghidra`, `dotnet`, `jvm`, `python`, `js`, `autoit`, `wasm`, `angr`) | ~4.8 GB |
+| All other modules (`core`, `die`, `ghidra`, `dotnet`, `jvm`, `python`, `js`, `autoit`, `wasm`, `angr`, `net`) | ~5.1 GB |
 | **Image total (default `EASYRE_TOOLS=all`)** | **~8–9 GB** |
 | Build cache during `docker compose build` | +1–3 GB (free with `docker builder prune`) |
 
