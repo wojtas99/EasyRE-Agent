@@ -15,7 +15,7 @@ The handout isn't a program to reverse but a file to pull something out of: an a
 2. **Archives**: extract (handle passwords and nested archives). The flag may be in a comment, a password-protected inner file, or a file with a misleading extension.
 3. **Documents** (PDF/OOXML): OOXML (`.docx/.xlsx/.pptx`) are ZIPs — unzip and read the XML and embedded media. PDFs hide data in streams, objects and metadata.
 4. **Images / stego**: check metadata, appended data (`binwalk`), LSBs, and distinct color planes. Look for a second file concatenated after the image's end marker.
-5. **Packet captures**: follow streams, export transferred objects, reassemble.
+5. **Packet captures**: follow streams, export transferred objects, reassemble. Tools: `tshark`/`capinfos` (the `net` module) and `scapy` (in `core`). If the capture is encrypted by a program that is also in the handout, switch to `code-and-data`.
 6. **Unknown/custom format**: hex-dump it, find the header magic, record field widths by spotting lengths/offsets/counts, and write a small Python parser in `/work/agent/` to walk and extract.
 
 ## Tools and commands
