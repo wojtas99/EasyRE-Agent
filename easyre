@@ -225,6 +225,76 @@ def skill_names():
     return sorted(d.name for d in SKILLS.iterdir() if (d / "SKILL.md").exists()) if SKILLS.is_dir() else []
 
 
+def pe_overlay(mm):
+    """Offset and size of data appended after a PE's last section (the
+    overlay), or None. Overlays carry installer payloads, .NET single-file
+    bundles and appended archives - worth flagging whatever the target is."""
+    try:
+        if mm[:2] != b"MZ":
+            return None
+        e = struct.unpack_from("<I", mm, 0x3c)[0]
+        if mm[e:e + 4] != b"PE\0\0":
+            return None
+        coff = e + 4
+        nsec = struct.unpack_from("<H", mm, coff + 2)[0]
+        sizeopt = struct.unpack_from("<H", mm, coff + 16)[0]
+        sectab = coff + 20 + sizeopt
+        if nsec <= 0 or sectab + nsec * 40 > len(mm):
+            return None
+        end = 0
+        for i in range(nsec):
+            sh = sectab + i * 40
+            raw = struct.unpack_from("<I", mm, sh + 20)[0]
+            rsz = struct.unpack_from("<I", mm, sh + 16)[0]
+            if raw:
+                end = max(end, raw + rsz)
+        return (end, len(mm) - end) if 0 < end < len(mm) else None
+    except (struct.error, ValueError):
+        return None
+
+
+def pe_pdb(mm):
+    """PDB path from a PE's CodeView (RSDS) debug record, or None. The build
+    path says who built the file and from what tree (a custom-built runtime
+    host, a project name, a CI machine)."""
+    try:
+        if mm[:2] != b"MZ":
+            return None
+        e = struct.unpack_from("<I", mm, 0x3c)[0]
+        if mm[e:e + 4] != b"PE\0\0":
+            return None
+        coff = e + 4
+        nsec = struct.unpack_from("<H", mm, coff + 2)[0]
+        sizeopt = struct.unpack_from("<H", mm, coff + 16)[0]
+        opt = coff + 20
+        magic = struct.unpack_from("<H", mm, opt)[0]
+        dirs = opt + (112 if magic == 0x20b else 96)
+        if dirs + 7 * 8 > opt + sizeopt:
+            return None
+        rva, size = struct.unpack_from("<II", mm, dirs + 6 * 8)
+        if not rva or not size:
+            return None
+        sectab = opt + sizeopt
+        off = None
+        for i in range(nsec):
+            sh = sectab + i * 40
+            vsz, va, rsz, raw = struct.unpack_from("<IIII", mm, sh + 8)
+            if va <= rva < va + max(vsz, rsz):
+                off = raw + (rva - va)
+                break
+        if off is None:
+            return None
+        for i in range(min(size // 28, 16)):
+            d = off + i * 28
+            typ, dsz, _, ptr = struct.unpack_from("<IIII", mm, d + 12)
+            if typ == 2 and dsz > 24 and mm[ptr:ptr + 4] == b"RSDS":
+                path = mm[ptr + 24:ptr + min(dsz, 1024)].split(b"\0", 1)[0]
+                return path.decode("utf-8", "replace") or None
+    except (struct.error, ValueError):
+        return None
+    return None
+
+
 def triage(src):
     lines, native = [], []
     files = sorted(p for p in src.rglob("*") if p.is_file())
@@ -260,6 +330,13 @@ def triage(src):
                 fx.write_bytes(b"MZ" + mm[2:])
                 tags.append(f"broken MZ header, repaired copy: agent/{fx.name}")
         if mm is not None:
+            pdb = pe_pdb(mm)
+            if pdb:
+                tags.append(f"PDB: {pdb}")
+            ov = pe_overlay(mm)
+            if ov:
+                tags.append(f"overlay: {ov[1]} B @ {ov[0]:#x} "
+                            "(data appended past the PE image - installer payload, bundle, archive)")
             mm.close()
             fh.close()
         if shutil.which("diec") and re.search(r"PE32|ELF|Mach-O|MS-DOS", ft):
