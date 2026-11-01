@@ -135,6 +135,107 @@ def rebuild(pid, base, oep):
     return img, magic, secs, sizeimg
 
 
+def _module_exports(pid, base, is64):
+    """{function_rva: name} from a module's PE export directory in memory."""
+    hdr = read_range(pid, base, 0x1000)
+    if hdr[:2] != b"MZ":
+        return {}
+    e = struct.unpack_from("<I", hdr, 0x3c)[0]
+    if hdr[e:e + 4] != b"PE\0\0":
+        return {}
+    opt = e + 24
+    dirs = opt + (112 if is64 else 96)
+    erva, esize = struct.unpack_from("<II", hdr, dirs)
+    if not erva or not esize:
+        return {}
+    ed = read_range(pid, base + erva, min(esize, 1 << 20))
+    if len(ed) < 40:
+        return {}
+    nfun = struct.unpack_from("<I", ed, 0x14)[0]
+    nnam = struct.unpack_from("<I", ed, 0x18)[0]
+    af, an, ao = struct.unpack_from("<III", ed, 0x1c)
+    funcs = read_range(pid, base + af, 4 * nfun)
+    names = read_range(pid, base + an, 4 * nnam)
+    ords = read_range(pid, base + ao, 2 * nnam)
+    out = {}
+    for i in range(min(nnam, 1 << 16)):
+        try:
+            nrva = struct.unpack_from("<I", names, 4 * i)[0]
+            oi = struct.unpack_from("<H", ords, 2 * i)[0]
+            frva = struct.unpack_from("<I", funcs, 4 * oi)[0]
+        except struct.error:
+            continue
+        nm = read_range(pid, base + nrva, 128).split(b"\0", 1)[0]
+        if nm and frva:
+            out[frva] = nm.decode("latin1", "replace")
+    return out
+
+
+def _modules(pid):
+    """[(base, end, name)] for PE modules mapped in the process."""
+    mods = {}
+    for s, e, p, path in maps(pid):
+        if path and looks_like_pe(pid, s):
+            key = os.path.basename(path)
+            if key not in mods:
+                mods[key] = [s, e]
+            else:
+                mods[key][1] = max(mods[key][1], e)
+    return [(v[0], v[1], k) for k, v in mods.items()]
+
+
+def iat_report(pid, img, base, is64, out):
+    """Scan the dump for pointer tables that land in other modules and map
+    each pointer to module!export. Writes <out>.iat.txt. Read-only, best effort."""
+    psize = 8 if is64 else 4
+    fmt = "<Q" if is64 else "<I"
+    mods = _modules(pid)
+    exports = {}
+    lines = []
+    run = []
+
+    def resolve(ptr):
+        for mb, me, name in mods:
+            if mb <= ptr < me:
+                if name not in exports:
+                    exports[name] = (mb, _module_exports(pid, mb, is64))
+                mbase, exp = exports[name]
+                rva = ptr - mbase
+                if rva in exp:
+                    return f"{name}!{exp[rva]}"
+                near = [r for r in exp if r <= rva]
+                if near:
+                    r = max(near)
+                    return f"{name}!{exp[r]}+{rva - r:#x}"
+                return f"{name}+{rva:#x}"
+        return None
+
+    def flush(start):
+        if len(run) >= 3:
+            for j, (rva, who) in enumerate(run):
+                lines.append(f"  {base + rva:#x}  (rva {rva:#x})  {who}")
+            lines.append("")
+        run.clear()
+
+    i = 0
+    n = len(img)
+    while i + psize <= n:
+        ptr = struct.unpack_from(fmt, img, i)[0]
+        who = resolve(ptr) if ptr else None
+        if who:
+            run.append((i, who))
+        else:
+            flush(i)
+        i += psize
+    flush(i)
+    rep = out + ".iat.txt"
+    with open(rep, "w") as f:
+        f.write(f"# import pointers resolved from process memory (pid {pid})\n"
+                f"# address (rva)  ->  module!export ; grouped into tables\n\n")
+        f.write("\n".join(lines) if lines else "# no resolvable import tables found\n")
+    return rep, sum(1 for l in lines if l.strip())
+
+
 def main():
     ap = argparse.ArgumentParser(prog="dump-mem", description="Dump an unpacked PE out of a running process's memory.")
     ap.add_argument("pid", type=int, help="pid of the (stopped) process, e.g. $(pgrep -f app.exe | tail -1)")
@@ -143,6 +244,7 @@ def main():
     ap.add_argument("--base", help="image base in memory (hex ok); skips auto-detection")
     ap.add_argument("--module", help="substring of the module file name to dump (default: the mapped *.exe)")
     ap.add_argument("--stop", action="store_true", help="SIGSTOP the process around the read (not while gdb owns it)")
+    ap.add_argument("--iat", action="store_true", help="also resolve import pointers to module!export -> <out>.iat.txt")
     a = ap.parse_args()
 
     if not os.path.isdir(f"/proc/{a.pid}"):
@@ -164,6 +266,9 @@ def main():
         img, magic, secs, sizeimg = rebuild(a.pid, base, oep)
         with open(a.out, "wb") as f:
             f.write(img)
+        iat = None
+        if a.iat:
+            iat = iat_report(a.pid, img, base, magic == 0x20b, a.out)
     finally:
         if stopped:
             os.kill(a.pid, signal.SIGCONT)
@@ -176,7 +281,9 @@ def main():
         log(f"entry set to OEP {oep:#x} (rva {(oep - base) & 0xffffffff:#x})")
     else:
         log("no --oep given: AddressOfEntryPoint left as the in-memory value (likely the packer stub)")
-    log("imports/IAT are NOT rebuilt - fine to read in Ghidra/objdump/strings; to make the dump run, rebuild the IAT.")
+    if a.iat and iat:
+        log(f"import map: {iat[1]} pointers resolved -> {iat[0]} (apply the names in Ghidra)")
+    log("the dumped PE itself is not relinked to run; it is for reading. --iat gives the import names.")
 
 
 if __name__ == "__main__":
