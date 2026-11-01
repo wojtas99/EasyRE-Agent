@@ -1,5 +1,7 @@
 <div align="center">
 
+![EasyRE-Agent](assets/banner.png)
+
 # 🧩 EasyRE-Agent
 
 **Give it a binary and a task. Pick any model. Get the answer, or learn how to find it yourself.**
