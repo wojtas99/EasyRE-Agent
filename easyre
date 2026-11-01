@@ -1385,13 +1385,14 @@ def doctor(argv):
         ("js", ["asar", "webcrack", "js-beautify"]),
         ("autoit", ["autoit-ripper", "autoit3"]),
         ("net", ["tshark", "capinfos"]),
+        ("emu", ["qltool"]),
         ("wasm", ["wasm-objdump", "wasm2wat", "wasm-decompile", "wasm-interp"]),
     ]
     print("  ---  toolchain (+ installed, - missing; EASYRE_TOOLS in .env picks modules, rebuild after a change):")
     for gname, tools in groups:
         marks = " ".join((CHK if shutil.which(t) else DOT) + t for t in tools)
         print(f"       {gname:<7} {marks}")
-    pys = [("z3", "z3"), ("angr", "angr"), ("capstone", "capstone"), ("unicorn", "unicorn"), ("lief", "lief"), ("pefile", "pefile"), ("scapy", "scapy")]
+    pys = [("z3", "z3"), ("angr", "angr"), ("capstone", "capstone"), ("unicorn", "unicorn"), ("lief", "lief"), ("pefile", "pefile"), ("scapy", "scapy"), ("qiling", "qiling")]
     print("       py      " + " ".join((CHK if have(mod) else DOT) + k for k, mod in pys))
     pf = CHK if (PREFETCH.exists() and os.access(PREFETCH, os.X_OK)) else DOT + " (install the ghidra module)"
     print(f"       prefetch hook: {pf}")

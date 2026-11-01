@@ -144,6 +144,16 @@ Packet-capture tooling for tasks that ship a `.pcap`/`.pcapng` (see the
 
 `scapy` (Python packet parsing) is installed by `core`, not here.
 
+### `emu` — ~0.4 GB
+
+Full-binary emulation (anti-Wine). See the `emulation` skill.
+
+| Tool | Use |
+|---|---|
+| `qiling` / `qltool` | Emulate a whole program on top of unicorn: `qltool run -f app --rootfs $QILING_ROOTFS/x8664_linux` |
+
+Rootfs at `/opt/easyre/qiling-rootfs` (ELF ready). Windows PE needs user-supplied system DLLs; `unicorn` (in `core`) emulates a single function with no rootfs.
+
 ### `angr` — ~1+ GB
 
 `angr` — binary symbolic execution (Python), pinned below 10 (9.x) so

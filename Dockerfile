@@ -42,6 +42,8 @@ COPY toolchain/modules/autoit.sh /opt/easyre/toolchain/modules/
 RUN sh /opt/easyre/toolchain/install.sh autoit
 COPY toolchain/modules/net.sh /opt/easyre/toolchain/modules/
 RUN sh /opt/easyre/toolchain/install.sh net
+COPY toolchain/modules/emu.sh /opt/easyre/toolchain/modules/
+RUN sh /opt/easyre/toolchain/install.sh emu
 COPY toolchain/modules/wasm.sh /opt/easyre/toolchain/modules/
 RUN sh /opt/easyre/toolchain/install.sh wasm
 COPY toolchain/modules/angr.sh /opt/easyre/toolchain/modules/

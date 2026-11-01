@@ -419,6 +419,7 @@ Skills are Markdown playbooks in `skills/<name>/SKILL.md`. The agent sees the li
 | 📦 | `unpacking` | Packed/protected binaries: unpack a copy, dump from memory at the OEP | ✅ |
 | 🧱 | `devirtualization` | Virtualized checks (VMProtect, Themida): trace handlers, lift the transform, solve | ✅ |
 | 🧬 | `code-and-data` | Binary + data file (pcap, blob, dump): recover the algorithm from code, decode the data | ✅ |
+| 🧪 | `emulation` | Emulate a program or one function (Qiling/unicorn) when Wine is detected or wrong | ✅ |
 | 🧮 | `solvers` | Constraint solving, symbolic execution, emulation | ✅ |
 | 🔐 | `crypto-id` | Recognizing crypto and encoding primitives | ✅ |
 | 🗂️ | `formats-forensics` | Documents, archives, images, captures, custom formats | ✅ |
@@ -453,6 +454,7 @@ EASYRE_TOOLS=core,die,ghidra
 | `autoit` | autoit-ripper, AutoIt interpreter (`autoit3`, under Wine) | ~0.05 GB |
 | `wasm` | wabt: wasm-objdump, wasm2wat, wasm-decompile, wasm-interp, wasm2c | ~0.02 GB |
 | `net` | tshark + capinfos (packet captures; scapy is in `core`) | ~0.3 GB |
+| `emu` | Qiling full-binary emulation (anti-Wine); unicorn is in `core` | ~0.4 GB |
 | `angr` | angr 9.x symbolic execution (pinned below 10, see `toolchain/README.md`) | ~1 GB |
 
 Each module is standalone and idempotent, so the agent (root, with network) can also pull a missing one in mid-job: `sh /opt/easyre/toolchain/modules/ghidra.sh`. That install is lost when the job ends, because every job runs in a fresh container, so bake in what you use.
@@ -476,7 +478,7 @@ Rough estimates, not measured:
 | Ubuntu base + Python + basic utilities | ~0.4 GB |
 | Node.js + Claude Code + Codex CLI | ~0.5 GB |
 | `wine` module (Wine 32/64 + Xvfb + prepared prefix + MinGW DLLs) | ~2 GB |
-| All other modules (`core`, `die`, `ghidra`, `dotnet`, `jvm`, `python`, `js`, `autoit`, `wasm`, `angr`, `net`) | ~5.1 GB |
+| All other modules (`core`, `die`, `ghidra`, `dotnet`, `jvm`, `python`, `js`, `autoit`, `wasm`, `angr`, `net`, `emu`) | ~5.5 GB |
 | **Image total (default `EASYRE_TOOLS=all`)** | **~8–9 GB** |
 | Build cache during `docker compose build` | +1–3 GB (free with `docker builder prune`) |
 

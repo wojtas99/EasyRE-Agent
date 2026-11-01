@@ -51,6 +51,7 @@ wine app.exe & gdb -p $(pgrep -f app.exe)   # native gdb onto the wine process
 - `WINEDEBUG=-all` (set in the image) silences the noise; unset it when you *want* tracing.
 - GUI programs may exit instantly under Xvfb if they need a resource Wine lacks; check with a quick `+relay` grep for the failing call.
 - Running the target is running untrusted code. These are crackmes — fine in this container; never do this with real malware outside an isolated VM.
+- If the target detects Wine (a protector that refuses to run or behaves differently), or you only need one function, emulate instead of executing - see the `emulation` skill.
 
 ## Verification
 
