@@ -178,6 +178,8 @@ PREFETCH = Path(os.environ.get("EASYRE_PREFETCH", "/opt/easyre/tools/prefetch"))
 # Finished prefetch runs, keyed by the SHA-256 of the binary. Lives in the
 # persistent /state volume, so a new job on the same binary skips Ghidra.
 PREFETCH_CACHE = STATE / "prefetch"
+# Native binaries above this size get a "large binary" note in triage.
+BIG_MB = int(os.environ.get("EASYRE_BIG_MB", "50"))
 # (signature, kind, label, mode). mode: "any" = anywhere in the file;
 # "start" = only as the file's leading bytes (a real file magic, not a
 # coincidental hit deep inside a big binary); "weak" = a signal too common to
@@ -347,7 +349,18 @@ def triage(src):
                 pass
         lines.append(f"- {f.relative_to(src)} ({f.stat().st_size} B): {ft}" + "".join(f"\n  - {t}" for t in tags))
         hosted = any(f"[{k}]" in t for k in NOT_NATIVE for t in tags) or any("AutoIt" in t for t in tags)
-        if re.search(r"PE32|ELF", ft) and "Mono/.Net" not in ft and not hosted and ".fixed." not in f.name:
+        native_exe = bool(re.search(r"PE32|ELF", ft)) and "Mono/.Net" not in ft and ".fixed." not in f.name
+        if native_exe and hosted:
+            how = (f"`prefetch /work/src/{f.relative_to(src)} /work/agent/prefetch-host`"
+                   if PREFETCH.exists() and os.access(PREFETCH, os.X_OK)
+                   else "install the ghidra module (`sh /opt/easyre/toolchain/modules/ghidra.sh`), then run `prefetch`")
+            lines[-1] += ("\n  - native host: the payload above runs inside a native executable; the host itself "
+                          f"may be modified too, so analyse both. Host analysis (not started automatically): {how}")
+        size = f.stat().st_size
+        if native_exe and size > BIG_MB << 20:
+            lines[-1] += (f"\n  - large binary ({size >> 20} MB): a full Ghidra pass may not finish within the "
+                          "analysis timeout; start from strings and xrefs and analyse only what you need")
+        if native_exe and not hosted:
             native.append(f)
     if len(files) > 200:
         lines.append(f"- ... {len(files) - 200} more files")

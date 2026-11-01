@@ -15,6 +15,7 @@ The goal is always a specific answer (password, key, flag, serial) recovered by 
 - You are root with network access. Install what you need; no approval is required.
 - Skills (below) are playbooks. Read the one matching the target before diving in.
 - Evidence over guessing: pull constants, tables and keys from the target itself.
+- The handout can hold several files with different roles: code to reverse, and data (a capture, an encrypted blob, a memory dump, an image). Note each file's role first. The answer may live in the data: recover the algorithm or key from the code, then apply it to the data offline.
 - Prefer the cheapest path that answers the question: running or emulating the check often beats reading all of it.
 - Long jobs run in the background with output to a file under `/work/agent`; poll the file.
 - When one approach stalls (~15 min with no progress - common on large custom VMs and heavy obfuscation) and your backend supports subagents, fan out into lanes: run 2-3 in parallel, each a *genuinely different* attack (e.g. static-invert vs. symbolic/`angr` vs. dynamic-emulate), not the same idea three times. Give each its own `/work/agent/lanes/<name>/` and a one-line brief, and have each append findings to `agent/notes.md`. The first lane to a candidate that `easyre check` accepts wins; stop the others and fold their dead ends into the notes.
