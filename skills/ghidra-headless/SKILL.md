@@ -46,6 +46,10 @@ getDataAt(toAddr(0x403000)).getValue()
 
 Pass arguments to your script with `getScriptArgs()` and reach them after `-postScript Name.py arg1 arg2`.
 
+## Diffing two builds
+
+When the target is a modified version of a known binary (a patched runtime, an instrumented fork), comparing it against the stock build localises the hand-made changes fast. Ghidra ships **Version Tracking** for this (correlators match functions between two programs; what does not match or has changed is the lead). It is a GUI feature and awkward to script headless, so this is usually a GUI-Ghidra step; `BinDiff` or `Diaphora` (fetch at runtime - root with network - and check versions) are CLI/DB alternatives. Get the reference build from the version/`PDB:` path triage reported. This is a technique to reach for on big known-codebase targets, not a one-command tool.
+
 ## Pitfalls
 
 - Two scripting paths: Java post-scripts (`.java`) run on stock headless Ghidra — that is what the shipped `PrefetchDump.java` uses; Python scripts need **PyGhidra** (CPython 3, via `pyghidraRun`), installed by this module. Match the file extension to the path you pick; do not assume a bundled Jython — there is none.

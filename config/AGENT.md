@@ -23,4 +23,5 @@ The goal is always a specific answer (password, key, flag, serial) recovered by 
 ## Answer checking
 - `easyre check '<answer>'`: exit 0 = accepted, 1 = rejected (output says why).
 - Only check candidates you have evidence for. No guess spraying.
+- No automatic check configured (GUI/network target, no success string)? Prove the answer yourself: show it comes out of the data/program by your reconstructed logic and matches the expected format, then still run `easyre check` to record it.
 - Do not stop before an answer is accepted (and, in hint mode, hints are finished). If a human is truly needed, write `/work/HELP.md` and stop.

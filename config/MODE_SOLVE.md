@@ -5,3 +5,5 @@ When `easyre check` accepts the answer, write `/work/report.md` and stop. The re
 - `## Solution path`: numbered steps, each with what you looked at (function, address, file) and what you learned.
 - `## Scripts`: the solver scripts you used (paths under /work and the essential code).
 - `## Dead ends`: what did not work, briefly.
+
+Hard, multi-file or virtualized tasks are expensive: raise `--budget-min` and split genuinely different approaches into lanes (see AGENT.md) rather than grinding one path.

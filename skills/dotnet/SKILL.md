@@ -1,6 +1,6 @@
 ---
 name: dotnet
-description: .NET / Mono managed assemblies and Unity games (Mono or IL2CPP). Decompile to C#, handle obfuscation, and recover IL2CPP metadata. Load when triage flags a .NET assembly or Unity. Requires the dotnet toolchain module.
+description: .NET / Mono managed assemblies and Unity games (Mono or IL2CPP). Decompile to C#, handle obfuscation, recover IL2CPP metadata, and extract single-file bundles. Load when triage flags a .NET assembly or Unity. Requires the dotnet toolchain module.
 ---
 
 # dotnet
@@ -15,7 +15,8 @@ Triage shows `.NET assembly` (`mscoree.dll`), a Unity game (`UnityPlayer`), or I
    - Decompile straight to C# with `ilspycmd`. Read the check in `Assembly-CSharp.dll` for Unity, or the main assembly otherwise.
    - If decompilation is garbage (renamed to `a.b.c`, control-flow mangled), it is obfuscated — deobfuscate first (`de4dot`), then decompile again.
 2. **Unity IL2CPP** (no managed DLLs, there is `GameAssembly.dll`/`libil2cpp.so` + `global-metadata.dat`): the C# was compiled to native. Recover symbol names with `il2cppdumper`, then read the native code (`ghidra-headless`) using the recovered names.
-3. **Find the check** in the recovered C#: usually a `bool`-returning method comparing the input to a field, a constant, or a hash. Managed strings are in cleartext in the metadata — grep them.
+3. **Single-file host** (one big `.exe`, triage shows `.NET single-file bundle` and/or a large `overlay`): the managed DLLs are bundled in the overlay and `ilspycmd` cannot open the host directly. Extract first: `dotnet-bundle /work/src/App.exe -o /work/agent/bundle` (add `--all` for the framework too), then decompile the DLLs from there. If triage shows an unusual host `PDB:` path (a custom-built runtime, not a stock framework), the host itself may be modified - analyse it natively too (`native-binaries`, `ghidra-headless`), because the managed code may only be a decoy.
+4. **Find the check** in the recovered C#: usually a `bool`-returning method comparing the input to a field, a constant, or a hash. Managed strings are in cleartext in the metadata — grep them.
 
 ## Tools and commands
 
@@ -39,6 +40,7 @@ strings -el App.dll | grep -iE 'flag|serial|correct|key'   # UTF-16 user strings
 - IL2CPP native code is meaningless without `il2cppdumper` first; the dump maps addresses to the original method names.
 - Obfuscators (ConfuserEx, etc.) may also encrypt strings and resources at runtime — sometimes running under a debugger and dumping is faster than static deobfuscation.
 - Unity logic can live in `Assembly-CSharp.dll`, not the launcher `.exe`.
+- A single-file host bundles everything; a clean-looking managed assembly inside it is not proof the logic is managed - a custom-built host (odd `PDB:` path) can carry native modifications.
 
 ## Verification
 

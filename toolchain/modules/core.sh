@@ -16,7 +16,7 @@ pip install --no-cache-dir \
   capstone keystone-engine unicorn z3-solver \
   pefile lief pyelftools macholib \
   yara-python ropgadget pwntools \
-  pycryptodome \
+  pycryptodome scapy \
   flare-floss
 
 mkdir -p /opt/easyre/tools/yara
@@ -44,7 +44,7 @@ for t in objdump readelf nm strings gdb strace radare2 upx binwalk exiftool yara
   command -v "$t" >/dev/null 2>&1 && printf '  [x] %s\n' "$t" || printf '  [ ] %s\n' "$t"
 done
 python3 - <<'PY' || true
-for m in ("capstone","keystone","unicorn","z3","pefile","lief","Crypto","yara","ropgadget"):
+for m in ("capstone","keystone","unicorn","z3","pefile","lief","Crypto","yara","ropgadget","scapy"):
     try:
         __import__(m); print(f"  [x] py:{m}")
     except Exception:

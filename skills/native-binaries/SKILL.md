@@ -20,6 +20,7 @@ The target is a compiled native executable (PE `.exe`/`.dll` or ELF) and not .NE
 2. **Locate input entry**: `main`/`WinMain`, `argv`, `scanf`/`fgets`/`ReadFile`/`GetWindowTextA`. For GUI, find the button/key handler (see `dynamic-wine`).
 3. **Find the check**: what the input is compared with (`strcmp`/`memcmp`), transformed by (loops, xor, arithmetic), or passed to. Pull the constants out of the binary; do not guess.
 4. **Decide read vs run**: a short local check — read and invert it. A long or data-driven one — run or emulate it (`dynamic-wine`, `solvers`).
+5. **Modified build of a known program?** If the target is a patched/instrumented build of something open-source or a stock runtime (a telltale `PDB:` path or version string from triage), do not read the whole thing — get the matching stock build and **diff** to isolate the author's changes (see `ghidra-headless`, Version Tracking). The modification is the challenge; the rest is noise.
 
 ## Tools and commands
 

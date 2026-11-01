@@ -265,7 +265,7 @@ Steps 1–3 and 5–7 are fixed code in `easyre`. Step 4 is what a model typical
 - Links the job as `/work`, the agent's working directory.
 - Picks the verifier: `--success` is set and the task has exactly one `.exe`, so the verifier is `wine /work/src/keygenme.exe`, with the candidate on stdin.
 
-**3. Triage.** For every file: `file`, byte markers (PyInstaller, .NET, UPX, VMProtect, Themida, Go, Rust, Delphi, AutoIt, WASM, Electron, …), repair of a broken `MZ` header, and `diec`. On the main native binary, the Ghidra prefetch starts in the background. It writes `functions.txt`, `strings.txt`, `imports.txt`, `decompiled.c` and finally `DONE` to `agent/prefetch/`. The result goes into `triage.md`:
+**3. Triage.** For every file: `file`, byte markers (PyInstaller, .NET, UPX, VMProtect, Themida, Go, Rust, Delphi, AutoIt, WASM, Electron, …), repair of a broken `MZ` header, `diec`, plus any PE overlay, PDB build path, and a note when a hosted target has a native host worth analysing. On the main native binary, the Ghidra prefetch starts in the background. It writes `functions.txt`, `strings.txt`, `imports.txt`, `decompiled.c` and finally `DONE` to `agent/prefetch/`. The result goes into `triage.md`:
 
 ```
 - keygenme.exe (48213 B): PE32 executable (console) Intel 80386, for MS Windows
@@ -305,7 +305,7 @@ exp = bytes.fromhex("1b2a3c...")
 print(bytes(((e - i) & 0xff) ^ 0x5A for i, e in enumerate(exp)).decode())
 ```
 
-Other targets change only the skill in step a and the tools: UPX → `upx -d`; a simple or custom packer → run to the OEP and `dump-mem`; .NET / Unity → `ilspycmd`, `de4dot`, `il2cppdumper`; PyInstaller → `pyinstxtractor-ng` + `pycdc`; APK / JAR → `jadx`, `apktool`, `cfr`; Electron → `asar` + `webcrack`; AutoIt → `autoit-ripper`; WebAssembly → `wasm-decompile` + Node; crypto → `capa`, `yara`, `pycryptodome`; a custom VM → handler map → disassembler → `z3`; a virtualizing protector (VMProtect/Themida) → unpack → trace handlers → lift → `z3`/`angr`.
+Other targets change only the skill in step a and the tools: UPX → `upx -d`; a simple or custom packer → run to the OEP and `dump-mem`; .NET / Unity → `ilspycmd`, `de4dot`, `il2cppdumper`; PyInstaller → `pyinstxtractor-ng` + `pycdc`; .NET single-file → `dotnet-bundle` then `ilspycmd`; binary + capture → reverse the algo, then `tshark`/`scapy` to decode the pcap; APK / JAR → `jadx`, `apktool`, `cfr`; Electron → `asar` + `webcrack`; AutoIt → `autoit-ripper`; WebAssembly → `wasm-decompile` + Node; crypto → `capa`, `yara`, `pycryptodome`; a custom VM → handler map → disassembler → `z3`; a virtualizing protector (VMProtect/Themida) → unpack → trace handlers → lift → `z3`/`angr`.
 
 **5. Verification.** `easyre check` runs the verifier (see [✅ How verification works](#-how-verification-works)). Here it runs `wine /work/src/keygenme.exe` with the candidate on stdin (up to 120 s) and matches the output against `Correct`. Accepted: the answer is stored in `.easyre/ANSWER` and the agent is told to write the report. Rejected: the agent keeps working. Every attempt is logged in `.easyre/attempts.log`.
 
@@ -418,6 +418,7 @@ Skills are Markdown playbooks in `skills/<name>/SKILL.md`. The agent sees the li
 | 🍷 | `dynamic-wine` | Running and observing Windows programs under Wine | ✅ |
 | 📦 | `unpacking` | Packed/protected binaries: unpack a copy, dump from memory at the OEP | ✅ |
 | 🧱 | `devirtualization` | Virtualized checks (VMProtect, Themida): trace handlers, lift the transform, solve | ✅ |
+| 🧬 | `code-and-data` | Binary + data file (pcap, blob, dump): recover the algorithm from code, decode the data | ✅ |
 | 🧮 | `solvers` | Constraint solving, symbolic execution, emulation | ✅ |
 | 🔐 | `crypto-id` | Recognizing crypto and encoding primitives | ✅ |
 | 🗂️ | `formats-forensics` | Documents, archives, images, captures, custom formats | ✅ |
@@ -451,6 +452,7 @@ EASYRE_TOOLS=core,die,ghidra
 | `js` | @electron/asar, webcrack, js-beautify | ~0.1 GB |
 | `autoit` | autoit-ripper, AutoIt interpreter (`autoit3`, under Wine) | ~0.05 GB |
 | `wasm` | wabt: wasm-objdump, wasm2wat, wasm-decompile, wasm-interp, wasm2c | ~0.02 GB |
+| `net` | tshark + capinfos (packet captures; scapy is in `core`) | ~0.3 GB |
 | `angr` | angr 9.x symbolic execution (pinned below 10, see `toolchain/README.md`) | ~1 GB |
 
 Each module is standalone and idempotent, so the agent (root, with network) can also pull a missing one in mid-job: `sh /opt/easyre/toolchain/modules/ghidra.sh`. That install is lost when the job ends, because every job runs in a fresh container, so bake in what you use.

@@ -132,6 +132,18 @@ WebAssembly modules. Node (base image) instantiates them and calls exports.
 | `wasm-interp` | Run exports or a WASI `_start`: `wasm-interp --wasi app.wasm` |
 | `wasm2c` | Module to C source |
 
+### `net` — ~0.3 GB
+
+Packet-capture tooling for tasks that ship a `.pcap`/`.pcapng` (see the
+`code-and-data` skill).
+
+| Tool | Use |
+|---|---|
+| `tshark` | Read/filter captures from the CLI: `tshark -r cap.pcapng -Y http -T fields -e data.data` |
+| `capinfos` | Summarise a capture |
+
+`scapy` (Python packet parsing) is installed by `core`, not here.
+
 ### `angr` — ~1+ GB
 
 `angr` — binary symbolic execution (Python), pinned below 10 (9.x) so
@@ -145,3 +157,8 @@ Python 3 + pip, Node.js, `7z`/`unzip`, `file`, `curl`, `git`, `jq`.
 PE from a running process's memory - run a packed target to its OEP under Wine,
 then `dump-mem <pid> --oep <addr> -o out.exe`. Stdlib Python, no module needed.
 See the `unpacking` skill.
+
+`dotnet-bundle` (at `/opt/easyre/tools/dotnet-bundle`, on `PATH`): extract the
+managed assemblies from a .NET single-file host's bundle (PE overlay) so
+`ilspycmd` can read them: `dotnet-bundle host.exe -o out/ [--all]`. Stdlib
+Python, no module needed. See the `dotnet` skill.

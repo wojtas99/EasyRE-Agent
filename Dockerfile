@@ -40,6 +40,8 @@ COPY toolchain/modules/js.sh /opt/easyre/toolchain/modules/
 RUN sh /opt/easyre/toolchain/install.sh js
 COPY toolchain/modules/autoit.sh /opt/easyre/toolchain/modules/
 RUN sh /opt/easyre/toolchain/install.sh autoit
+COPY toolchain/modules/net.sh /opt/easyre/toolchain/modules/
+RUN sh /opt/easyre/toolchain/install.sh net
 COPY toolchain/modules/wasm.sh /opt/easyre/toolchain/modules/
 RUN sh /opt/easyre/toolchain/install.sh wasm
 COPY toolchain/modules/angr.sh /opt/easyre/toolchain/modules/
@@ -51,11 +53,12 @@ COPY config/ /opt/easyre/config/
 COPY skills/ /opt/easyre/skills/
 COPY easyre /usr/local/bin/easyre
 COPY toolchain/dump-mem /opt/easyre/tools/dump-mem
+COPY toolchain/dotnet-bundle /opt/easyre/tools/dotnet-bundle
 RUN mkdir -p /opt/easyre/tools /root/.claude /root/.agents /state/codex /tasks /jobs && \
     cp /opt/easyre/config/claude-settings.json /root/.claude/settings.json && \
     echo '{"hasCompletedOnboarding": true}' > /root/.claude.json && \
     ln -sfn /opt/easyre/skills /root/.claude/skills && ln -sfn /opt/easyre/skills /root/.agents/skills && \
-    chmod +x /usr/local/bin/easyre /opt/easyre/config/*.sh /opt/easyre/tools/dump-mem && \
+    chmod +x /usr/local/bin/easyre /opt/easyre/config/*.sh /opt/easyre/tools/dump-mem /opt/easyre/tools/dotnet-bundle && \
     claude --version && codex --version
 
 WORKDIR /jobs

@@ -191,6 +191,8 @@ MARKERS = [
     (b"mscoree.dll", "dotnet", ".NET assembly", "any"),
     (b"UnityPlayer", "dotnet", "Unity game", "any"),
     (b"global-metadata.dat", "dotnet", "Unity IL2CPP", "any"),
+    (bytes.fromhex("8b1202b96a612038727b930214d7a03213f5b9e6efae3318ee3b2dce24b36aae"),
+     "dotnet", ".NET single-file bundle", "any"),
     (b"UPX!", "packed", "UPX", "any"),
     (b".vmp0\x00\x00\x00", "protected", "VMProtect", "any"),
     (b".themida", "protected", "Themida", "any"),
@@ -1382,13 +1384,14 @@ def doctor(argv):
         ("python", ["pyinstxtractor-ng", "pycdc", "decompyle3"]),
         ("js", ["asar", "webcrack", "js-beautify"]),
         ("autoit", ["autoit-ripper", "autoit3"]),
+        ("net", ["tshark", "capinfos"]),
         ("wasm", ["wasm-objdump", "wasm2wat", "wasm-decompile", "wasm-interp"]),
     ]
     print("  ---  toolchain (+ installed, - missing; EASYRE_TOOLS in .env picks modules, rebuild after a change):")
     for gname, tools in groups:
         marks = " ".join((CHK if shutil.which(t) else DOT) + t for t in tools)
         print(f"       {gname:<7} {marks}")
-    pys = [("z3", "z3"), ("angr", "angr"), ("capstone", "capstone"), ("unicorn", "unicorn"), ("lief", "lief"), ("pefile", "pefile")]
+    pys = [("z3", "z3"), ("angr", "angr"), ("capstone", "capstone"), ("unicorn", "unicorn"), ("lief", "lief"), ("pefile", "pefile"), ("scapy", "scapy")]
     print("       py      " + " ".join((CHK if have(mod) else DOT) + k for k, mod in pys))
     pf = CHK if (PREFETCH.exists() and os.access(PREFETCH, os.X_OK)) else DOT + " (install the ghidra module)"
     print(f"       prefetch hook: {pf}")
@@ -1397,6 +1400,8 @@ def doctor(argv):
           + (" (off: EASYRE_PREFETCH_CACHE=0)" if os.environ.get("EASYRE_PREFETCH_CACHE") == "0" else ""))
     dm = shutil.which("dump-mem") or "/opt/easyre/tools/dump-mem"
     print(f"       dump-mem helper: {CHK if (Path(dm).exists() and os.access(dm, os.X_OK)) else DOT}")
+    db = shutil.which("dotnet-bundle") or "/opt/easyre/tools/dotnet-bundle"
+    print(f"       dotnet-bundle helper: {CHK if (Path(db).exists() and os.access(db, os.X_OK)) else DOT}")
     names = skill_names()
     todo = [n for n in names if "TODO" in (SKILLS / n / "SKILL.md").read_text()]
     print(f"  ---  skills: {len(names)} installed, {len(names) - len(todo)} filled in, {len(todo)} still TODO")
