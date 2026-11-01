@@ -11,7 +11,7 @@ At the start of every task, before choosing tools. This is the overall plan. The
 
 ## Steps
 
-1. **Orient.** Read `TASK.md`: its wording and title often point at the intended path. Read `triage.md`: it already lists the file type and, if DIE is installed, the compiler, packer and protections. Do not re-run tools to learn what is already there.
+1. **Orient.** Read `TASK.md`: its wording and title often point at the intended path. Read `triage.md`: it already lists the file type and, if DIE is installed, the compiler, packer and protections. Do not re-run tools to learn what is already there. Triage also flags overlays (appended data), PDB build paths and native hosts. With several files, note each one's role (code to reverse, data to decode) before diving in.
 2. **Pick the category**: native PE/ELF, .NET, Python, Java/Android, JavaScript, AutoIt, WebAssembly, custom VM, a virtualizing protector (VMProtect/Themida -> `devirtualization`), or a non-code file. Load the matching skill.
 3. **Packed or obfuscated?** Unpack a copy first (load `unpacking`): `upx -d` for UPX, and for a simple or custom packer run to the OEP under Wine and dump the image with `dump-mem`. If the answer is built at runtime, plan to run or emulate that part instead of reading all of it.
 4. **Find the check.** Where does the input enter (argv, stdin, a text field, a key handler)? What is it compared with, transformed by, or passed to?
@@ -31,6 +31,7 @@ At the start of every task, before choosing tools. This is the overall plan. The
 - Modifying `src/`. Patch and unpack only copies in `agent/`.
 - Brute force that would take more than a couple of hours means you are on the wrong path.
 - Repeating dead ends. Record them in `agent/notes.md`.
+- Defending a rejected answer. Decoys exist: a flag that `easyre check` rejects, or that does not match the expected format, is a lead to keep digging, not an answer. Look for the real check elsewhere: another file, the overlay, the native host.
 
 ## Verification
 
