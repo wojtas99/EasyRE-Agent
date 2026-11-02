@@ -165,6 +165,7 @@ easyre login claude|codex       authenticate a backend
 | `--success REGEX` | Output that means the answer was accepted |
 | `--verify CMD` | Checker command. `{}` is replaced by the candidate; otherwise the candidate goes to stdin. |
 | `--flag-format REGEX` | Required answer shape, e.g. `"flag\{.+\}"` |
+| `--flag-sha256 HEX` | SHA-256 of the known answer. `easyre check` compares hashes, so the agent gets a real correct/incorrect without ever seeing the flag. For testing on already-solved tasks. |
 | `--profile` | Model profile from `config/backends.toml` |
 | `--backend` | `claude` (default), `codex` or `openai` |
 | `--model` | Model name for the backend |
@@ -186,6 +187,17 @@ easyre login claude|codex       authenticate a backend
 .\easyre.cmd run crackme --backend openai --model qwen3-coder --budget-min 30
 .\easyre.cmd resume crackme --budget-min 60
 ```
+
+**Testing on solved challenges (e.g. past FLARE-On).** Give the flag shape and the SHA-256 of the known flag. `easyre check` then answers correct/incorrect for real, a wrong-shape answer is rejected at once, and the flag itself never reaches the agent:
+
+```powershell
+# SHA-256 of the known flag (example flag, not a real one)
+(Get-FileHash -InputStream ([IO.MemoryStream]::new([Text.Encoding]::UTF8.GetBytes('example_fl4g@flare-on.com')))).Hash.ToLower()
+
+.\easyre.cmd run ThreatInvaders --flag-format ".*@flare-on\.com" --flag-sha256 <hash-from-above>
+```
+
+On Linux/macOS: `printf '%s' 'example_fl4g@flare-on.com' | sha256sum`. Without a known flag, `--flag-format ".*@flare-on\.com"` alone already stops wrong-shape answers. The hash sits in the job's `.easyre/job.json`: it guards against wrong answers, not against brute force, so a short answer (a 4-digit PIN) can be recovered from it - use it for testing, not as a secret.
 
 ### 📂 Opening results
 
@@ -227,9 +239,10 @@ The conversation is saved to `tutor.md` in the job folder. If a reply accidental
 ### ✅ How verification works
 
 1. `--flag-format` must match, if set.
-2. `--verify` runs, and its output is matched against `--success`. Without `--success`, exit code 0 counts as success.
-3. If only `--success` is set and the task has exactly one `.exe` or ELF file, that file is run automatically with the candidate on stdin (through Wine for `.exe`).
-4. With no verifier, `easyre check` only records candidates: the agent must prove the answer and submit it with `easyre check --final`. The report then says `answered (unverified)`, not `solved`, and `easyre resume` reopens the job. Pass `--flag-format` to at least reject answers of the wrong shape.
+2. If `--flag-sha256` is set, the SHA-256 of the answer must match it. That result is final; nothing is run.
+3. `--verify` runs, and its output is matched against `--success`. Without `--success`, exit code 0 counts as success.
+4. If only `--success` is set and the task has exactly one `.exe` or ELF file, that file is run automatically with the candidate on stdin (through Wine for `.exe`).
+5. With no verifier, `easyre check` only records candidates: the agent must prove the answer and submit it with `easyre check --final`. The report then says `answered (unverified)`, not `solved`, and `easyre resume` reopens the job. Pass `--flag-format` to at least reject answers of the wrong shape.
 
 ### 🔧 Commands the agent uses
 

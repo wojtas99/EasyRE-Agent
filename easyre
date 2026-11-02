@@ -20,6 +20,7 @@ run/resume options:
   --desc TEXT | --desc-file FILE   task description (default: task.md / README.md in the target folder)
   --success REGEX                  output that means the answer was accepted, e.g. "Correct|Success"
   --flag-format REGEX              shape of the answer, e.g. "flag\\{.*\\}"
+  --flag-sha256 HEX                SHA-256 of the known answer: easyre check compares hashes (tests on solved tasks)
   --verify CMD                     command that checks a candidate ({} = candidate, otherwise sent on stdin)
   --profile NAME                   model profile from config/backends.toml
   --backend claude|codex|openai    default: claude
@@ -443,7 +444,9 @@ def instructions(cfg):
         t += "\n" + tools.read_text()
     v = ["\n## Verification set up for this job"]
     v.append(f"- Answer format: `{cfg['flag_format']}`" if cfg.get("flag_format") else "- Answer format: not given.")
-    if cfg.get("verify"):
+    if cfg.get("flag_sha256"):
+        v.append("- `easyre check` compares your answer with a SHA-256 of the real answer (exact string, surrounding whitespace ignored). `correct`/`incorrect` is final. Submit only candidates you have evidence for; never spray guesses.")
+    elif cfg.get("verify"):
         v.append(f"- `easyre check` runs: `{cfg['verify']}` and looks for `{cfg.get('success') or '(exit code 0)'}` in the output.")
     elif cfg.get("success"):
         v.append(f"- Success output: `{cfg['success']}`. No run command was set, so run the target yourself and show the success output in the report.")
@@ -494,7 +497,7 @@ def prepare(args):
                 extract(f, src)
     else:
         extract(target, src)
-    cfg = {"name": name, "target": str(target), "desc": desc.strip(), "success": args.success, "flag_format": args.flag_format,
+    cfg = {"name": name, "target": str(target), "desc": desc.strip(), "success": args.success, "flag_format": args.flag_format, "flag_sha256": args.flag_sha256,
            "verify": args.verify, "backend": args.backend, "model": args.model, "mode": args.mode,
            "budget_min": args.budget_min, "budget_tokens": args.budget_tokens, "created": time.strftime("%F %T"),
            "elapsed_s": 0, "tokens": 0, "session": None}
@@ -1150,6 +1153,10 @@ def verify(cfg, cand):
     fmt, cmd, ok = cfg.get("flag_format"), cfg.get("verify"), cfg.get("success")
     if fmt and not re.fullmatch(fmt, cand):
         return "bad-format", f"does not match {fmt}"
+    want = (cfg.get("flag_sha256") or "").strip().lower()
+    if want:
+        got = hashlib.sha256(cand.strip().encode()).hexdigest()
+        return ("correct", "matches the expected SHA-256") if got == want else ("incorrect", "SHA-256 does not match the expected answer")
     if not cmd:
         return "unverified", "no verifier configured; accepted on your evidence"
     run = cmd.replace("{}", subprocess.list2cmdline([cand])) if "{}" in cmd else cmd
@@ -1497,6 +1504,7 @@ def opts(p):
     p.add_argument("--desc-file")
     p.add_argument("--success")
     p.add_argument("--flag-format")
+    p.add_argument("--flag-sha256")
     p.add_argument("--verify")
     p.add_argument("--profile")
     p.add_argument("--backend", choices=list(BACKENDS))
@@ -1526,6 +1534,8 @@ def main():
     p.add_argument("target" if cmd == "run" else "job")
     opts(p)
     args = p.parse_args(rest)
+    if args.flag_sha256 and not re.fullmatch(r"[0-9a-fA-F]{64}", args.flag_sha256.strip()):
+        sys.exit("--flag-sha256 needs the 64-character hex SHA-256 of the answer")
     prof = resolve_profile(args, cmd)
     if cmd == "run":
         for k, v in {"backend": os.environ.get("EASYRE_BACKEND", "claude"), "mode": "solve",
@@ -1547,7 +1557,7 @@ def main():
         for f in ("CLOSED",) + (("ANSWER", "CHECK", "DONE") if reopen else ()):
             (meta(job) / f).unlink(missing_ok=True)
         cfg = jload(meta(job) / "job.json")
-        for k in ("desc", "success", "flag_format", "verify", "backend", "model", "mode", "budget_min", "budget_tokens"):
+        for k in ("desc", "success", "flag_format", "flag_sha256", "verify", "backend", "model", "mode", "budget_min", "budget_tokens"):
             if getattr(args, k, None) is not None:
                 cfg[k] = getattr(args, k)
         if prof:
