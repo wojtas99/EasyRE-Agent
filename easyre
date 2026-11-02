@@ -11,9 +11,9 @@
   easyre doctor                    check that the setup works
   easyre stats                     time, tokens and cost per model over all jobs
   easyre close JOB                 mark a job as closed (resume reopens it)
-  easyre rm JOB... | --FILTER [-y] delete job folders; filters: --open --closed --unsolved --solved --all
+  easyre rm JOB... | --FILTER [-y] delete job folders; filters: --open --closed --unsolved --solved --unverified --all
   easyre login claude|codex        authenticate a backend
-  easyre check CANDIDATE           (agent) verify a candidate answer
+  easyre check [--final] CANDIDATE (agent) verify a candidate answer (--final: submit without a verifier)
   easyre done                      (agent, hint mode) mark hints as finished
 
 run/resume options:
@@ -62,7 +62,7 @@ def log(*a, color=None):
             color = "red"
         elif low.startswith(("solved", "hints ready", "tutor ready")):
             color = "green"
-        elif low.startswith(("budget", "stopped", "agent stopped", "transient", "previous agent session")):
+        elif low.startswith(("budget", "stopped", "agent stopped", "transient", "previous agent session", "answered (unverified)")):
             color = "yellow"
         elif low.startswith(("agent:",)):
             color = "bold"
@@ -448,7 +448,7 @@ def instructions(cfg):
     elif cfg.get("success"):
         v.append(f"- Success output: `{cfg['success']}`. No run command was set, so run the target yourself and show the success output in the report.")
     else:
-        v.append("- No automatic check. Prove the answer yourself (run the target, or reimplement the check and show it passes) before `easyre check`.")
+        v.append("- No automatic check. `easyre check` only records candidates here. Prove the answer yourself (run the target, or reimplement the check and show it passes), then submit it with `easyre check --final '<answer>'`.")
     return t + "\n".join(v) + "\n"
 
 
@@ -1105,7 +1105,8 @@ def report(job, cfg, why):
     ans = (m / "ANSWER").read_text().strip() if (m / "ANSWER").exists() else ""
     help_md = job / "HELP.md"
     if ans:
-        status = "solved"
+        unver = (m / "CHECK").exists() and (m / "CHECK").read_text().strip() == "unverified"
+        status = "answered (unverified)" if unver else "solved"
     elif help_md.exists():
         status = "stopped: human input needed (see HELP.md)"
     else:
@@ -1169,11 +1170,22 @@ AGENT_ONLY = ("`easyre {}` is used by the agent inside a running job, not from y
 def check(argv):
     if not meta().is_dir():
         sys.exit(AGENT_ONLY.format("check"))
-    if not argv:
-        sys.exit("usage: easyre check '<answer>'")
-    cand = argv[-1]
+    final = "--final" in argv
+    args = [a for a in argv if a != "--final"]
+    if not args:
+        sys.exit("usage: easyre check [--final] '<answer>'")
+    cand = args[-1]
     cfg = jload(meta() / "job.json") or {}
     status, detail = verify(cfg, cand)
+    if status == "unverified" and not final:
+        # No verifier: a bare check is only a candidate. Probing the command
+        # (e.g. `easyre check test`) must never end the job as "solved".
+        with open(meta() / "attempts.log", "a") as o:
+            o.write(f"{time.strftime('%H:%M:%S')} candidate {cand}\n")
+        print("candidate (not accepted): no verifier is configured for this job, so nothing can confirm this answer.")
+        print("-> Keep working until you can prove it: the answer must come out of the program/data by your reconstructed")
+        print("   logic, or make the real target print its success message. Then submit with: easyre check --final '<answer>'")
+        return 1
     with open(meta() / "attempts.log", "a") as o:
         o.write(f"{time.strftime('%H:%M:%S')} {status} {cand}\n")
     print(status)
@@ -1253,7 +1265,8 @@ def hint(argv):
 def job_status(d):
     m = meta(d)
     if (m / "ANSWER").exists():
-        return "solved"
+        unver = (m / "CHECK").exists() and (m / "CHECK").read_text().strip() == "unverified"
+        return "unverified" if unver else "solved"
     if (m / "DONE").exists():
         return "hints"
     if (m / "answer").exists() and (jload(m / "job.json") or {}).get("mode") == "tutor":
@@ -1275,7 +1288,7 @@ def jobs(_):
     for d in js:
         c = jload(meta(d) / "job.json") or {}
         st = job_status(d)
-        stc = {"solved": "green", "hints": "green", "tutor": "green", "open": "yellow", "closed": "blue"}.get(st)
+        stc = {"solved": "green", "hints": "green", "tutor": "green", "unverified": "yellow", "open": "yellow", "closed": "blue"}.get(st)
         e = int(c.get("elapsed_s", 0))
         print(f"{d.name:45} {paint(f'{st:7}', stc) if stc else f'{st:7}'} {c.get('backend', ''):7} {shown_model(c)[:24]:24} {c.get('mode', ''):5} {e // 60:>3}:{e % 60:02d} {c.get('tokens', 0):>9} tok")
     return 0
@@ -1293,7 +1306,8 @@ def close(argv):
 def remove(argv):
     names = [a for a in argv if not a.startswith("-")]
     groups = {"--open": {"open"}, "--closed": {"closed"}, "--unsolved": {"open", "closed"},
-              "--solved": {"solved", "hints"}, "--all": {"open", "closed", "solved", "hints"}}
+              "--solved": {"solved", "hints"}, "--unverified": {"unverified"},
+              "--all": {"open", "closed", "solved", "hints", "unverified"}}
     wanted = set().union(*[groups[a] for a in argv if a in groups])
     unknown = [a for a in argv if a.startswith("-") and a not in groups and a != "-y"]
     if unknown or not (wanted or names):
@@ -1529,7 +1543,8 @@ def main():
         if job_status(job) in ("solved", "hints") and "--force" not in rest:
             print(f"{job.name} is already {job_status(job)}. See {job.name}/report.md, or add --force to run the agent again.")
             return 0
-        for f in ("CLOSED",) + (("ANSWER", "CHECK", "DONE") if args.force else ()):
+        reopen = args.force or job_status(job) == "unverified"
+        for f in ("CLOSED",) + (("ANSWER", "CHECK", "DONE") if reopen else ()):
             (meta(job) / f).unlink(missing_ok=True)
         cfg = jload(meta(job) / "job.json")
         for k in ("desc", "success", "flag_format", "verify", "backend", "model", "mode", "budget_min", "budget_tokens"):

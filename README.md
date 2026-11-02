@@ -155,7 +155,7 @@ easyre profiles                 list model profiles
 easyre doctor                   check that the setup works
 easyre stats                    time, tokens and cost per model
 easyre close JOB                mark a job as closed (resume reopens it)
-easyre rm JOB... | --FILTER     delete job folders; filters: --open --closed --unsolved --solved --all
+easyre rm JOB... | --FILTER     delete job folders; filters: --open --closed --unsolved --solved --unverified --all
 easyre login claude|codex       authenticate a backend
 ```
 
@@ -229,7 +229,7 @@ The conversation is saved to `tutor.md` in the job folder. If a reply accidental
 1. `--flag-format` must match, if set.
 2. `--verify` runs, and its output is matched against `--success`. Without `--success`, exit code 0 counts as success.
 3. If only `--success` is set and the task has exactly one `.exe` or ELF file, that file is run automatically with the candidate on stdin (through Wine for `.exe`).
-4. With no verifier, the agent must prove the answer itself, and the report marks it `unverified`.
+4. With no verifier, `easyre check` only records candidates: the agent must prove the answer and submit it with `easyre check --final`. The report then says `answered (unverified)`, not `solved`, and `easyre resume` reopens the job. Pass `--flag-format` to at least reject answers of the wrong shape.
 
 ### 🔧 Commands the agent uses
 
@@ -237,7 +237,7 @@ The conversation is saved to `tutor.md` in the job folder. If a reply accidental
 
 | Command | What it does |
 |---|---|
-| `easyre check '<answer>'` | Runs the verifier above on a candidate. Exit 0 = accepted: the answer is stored in the job and the agent writes the report. Any other exit = rejected, and the agent keeps working. Every attempt is logged in `.easyre/attempts.log`. |
+| `easyre check '<answer>'` | Runs the verifier above on a candidate (with no verifier: recorded as a candidate only, unless `--final`). Exit 0 = accepted: the answer is stored in the job and the agent writes the report. Any other exit = rejected, and the agent keeps working. Every attempt is logged in `.easyre/attempts.log`. |
 | `easyre done` | Hint mode only: confirms `hints.md` has enough sections and does not contain the answer, then marks the hints as finished. |
 
 Run from your own console, they only print a note, because there is no job to check against. Use `easyre jobs` and `easyre open` to see results.

@@ -21,7 +21,7 @@ The goal is always a specific answer (password, key, flag, serial) recovered by 
 - When one approach stalls (~15 min with no progress - common on large custom VMs and heavy obfuscation) and your backend supports subagents, fan out into lanes: run 2-3 in parallel, each a *genuinely different* attack (e.g. static-invert vs. symbolic/`angr` vs. dynamic-emulate), not the same idea three times. Give each its own `/work/agent/lanes/<name>/` and a one-line brief, and have each append findings to `agent/notes.md`. The first lane to a candidate that `easyre check` accepts wins; stop the others and fold their dead ends into the notes.
 
 ## Answer checking
-- `easyre check '<answer>'`: exit 0 = accepted, 1 = rejected (output says why).
+- `easyre check '<answer>'`: exit 0 = accepted, 1 = rejected (output says why). Without a configured verifier a bare check only records a candidate (exit 1); submit a proven answer with `easyre check --final '<answer>'`. Never probe the command with dummy values.
 - Only check candidates you have evidence for. No guess spraying.
-- No automatic check configured (GUI/network target, no success string)? Prove the answer yourself: show it comes out of the data/program by your reconstructed logic and matches the expected format, then still run `easyre check` to record it.
+- No automatic check configured (GUI/network target, no success string)? Prove the answer yourself: show it comes out of the data/program by your reconstructed logic and matches the expected format, then submit it with `easyre check --final '<answer>'`.
 - Do not stop before an answer is accepted (and, in hint mode, hints are finished). If a human is truly needed, write `/work/HELP.md` and stop.
