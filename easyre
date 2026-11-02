@@ -1375,6 +1375,8 @@ def doctor(argv):
         except Exception:
             return False
     CHK, DOT = "+", "-"
+    def ok_mark(ok, label=""):
+        return paint(("+" if ok else "-") + label, "green" if ok else "dim")
     groups = [
         ("core", ["objdump", "gdb", "radare2", "strings", "upx", "binwalk", "yara", "floss", "capa"]),
         ("die", ["diec"]),
@@ -1390,19 +1392,19 @@ def doctor(argv):
     ]
     print("  ---  toolchain (+ installed, - missing; EASYRE_TOOLS in .env picks modules, rebuild after a change):")
     for gname, tools in groups:
-        marks = " ".join((CHK if shutil.which(t) else DOT) + t for t in tools)
+        marks = " ".join(ok_mark(bool(shutil.which(t)), t) for t in tools)
         print(f"       {gname:<7} {marks}")
     pys = [("z3", "z3"), ("angr", "angr"), ("capstone", "capstone"), ("unicorn", "unicorn"), ("lief", "lief"), ("pefile", "pefile"), ("scapy", "scapy"), ("qiling", "qiling")]
-    print("       py      " + " ".join((CHK if have(mod) else DOT) + k for k, mod in pys))
-    pf = CHK if (PREFETCH.exists() and os.access(PREFETCH, os.X_OK)) else DOT + " (install the ghidra module)"
-    print(f"       prefetch hook: {pf}")
+    print("       py      " + " ".join(ok_mark(have(mod), k) for k, mod in pys))
+    pf_ok = PREFETCH.exists() and os.access(PREFETCH, os.X_OK)
+    print(f"       prefetch hook: {ok_mark(pf_ok)}" + ("" if pf_ok else paint(" (install the ghidra module)", "yellow")))
     nc = len(list(PREFETCH_CACHE.glob("*/DONE"))) if PREFETCH_CACHE.is_dir() else 0
     print(f"       prefetch cache: {nc} binar{'y' if nc == 1 else 'ies'} in {PREFETCH_CACHE}"
           + (" (off: EASYRE_PREFETCH_CACHE=0)" if os.environ.get("EASYRE_PREFETCH_CACHE") == "0" else ""))
     dm = shutil.which("dump-mem") or "/opt/easyre/tools/dump-mem"
-    print(f"       dump-mem helper: {CHK if (Path(dm).exists() and os.access(dm, os.X_OK)) else DOT}")
+    print(f"       dump-mem helper: {ok_mark(Path(dm).exists() and os.access(dm, os.X_OK))}")
     db = shutil.which("dotnet-bundle") or "/opt/easyre/tools/dotnet-bundle"
-    print(f"       dotnet-bundle helper: {CHK if (Path(db).exists() and os.access(db, os.X_OK)) else DOT}")
+    print(f"       dotnet-bundle helper: {ok_mark(Path(db).exists() and os.access(db, os.X_OK))}")
     names = skill_names()
     todo = [n for n in names if "TODO" in (SKILLS / n / "SKILL.md").read_text()]
     print(f"  ---  skills: {len(names)} installed, {len(names) - len(todo)} filled in, {len(todo)} still TODO")
