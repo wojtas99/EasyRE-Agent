@@ -1488,21 +1488,30 @@ def stats(_):
     return 0
 
 
-# Shell-command tool usage, counted from each job's log.jsonl.
+# Shell-command tool usage, counted from each job's log.jsonl. Only a known set
+# of real tools counts; heredoc bodies, pasted code and shell glue (cd, echo,
+# cat, ...) never show up. One chained command can invoke several tools.
 _TOOL_PREFIX = {"sudo", "env", "nohup", "time", "xvfb-run", "stdbuf", "nice", "ionice",
                 "exec", "command", "builtin", "do", "then", "else", "\\"}
 _TOOL_PREFIX_ARG = {"timeout"}
-_TOOL_NOISE = {"cd", "echo", "ls", "cat", "mkdir", "cp", "mv", "rm", "rmdir", "touch", "chmod",
-               "chown", "export", "set", "unset", "true", "false", "sleep", "pwd", "head", "tail",
-               "wc", "sort", "uniq", "tr", "cut", "printf", "test", "read", "kill", "pkill", "pgrep",
-               "source", ".", ":", "return", "fi", "done", "while", "for", "if", "elif", "case", "esac",
-               "ln", "mktemp", "tee", "yes", "clear", "basename", "dirname", "seq", "tput", "stat",
-               "df", "du", "free", "dmesg", "export", "eval", "wait", "trap"}
-_TOOL_ALIAS = {"python3": "python", "pip3": "pip", "egrep": "grep", "fgrep": "grep"}
+_TOOL_ALIAS = {"python3": "python", "pypy3": "python", "pip3": "pip", "egrep": "grep",
+               "fgrep": "grep", "r2": "radare2", "wine64": "wine", "g++": "gcc",
+               "cc": "gcc", "7za": "7z", "apt": "apt-get"}
+_TOOL_BINS = set((
+    "python python3 pypy3 pip pip3 uv sed awk gawk perl rg grep egrep fgrep find "
+    "xxd hexdump od file diec exiftool jq node npx npm 7z 7za unzip tar gzip gunzip xz zip "
+    "gcc g++ cc clang make cmake cargo go java openssl curl wget apt apt-get "
+    "strings floss capa objdump nm readelf radare2 r2 rabin2 gdb strace ltrace upx binwalk yara "
+    "analyzeheadless pyghidrarun prefetch ilspycmd de4dot il2cppdumper dotnet mono "
+    "jadx apktool cfr pyinstxtractor-ng pycdc pycdas decompyle3 uncompyle6 "
+    "asar webcrack js-beautify autoit-ripper autoit3 "
+    "wasm-objdump wasm2wat wat2wasm wasm-decompile wasm-interp wasm2c wasm-tools "
+    "tshark capinfos qltool wine wine64 winedbg dump-mem dotnet-bundle easyre"
+).split())
 
 
 def _find_commands(ev):
-    """Yield every string under a key named 'command' (Claude tool_use input.command, codex item.command)."""
+    """Yield every string under a key named 'command' (Claude input.command, codex item.command)."""
     stack = [ev]
     while stack:
         x = stack.pop()
@@ -1516,27 +1525,53 @@ def _find_commands(ev):
             stack.extend(x)
 
 
+def _strip_heredocs(cmd):
+    """Remove here-document bodies so pasted scripts are not counted as commands."""
+    while True:
+        m = cmd.find("<<")
+        if m < 0:
+            return cmd
+        rest = cmd[m + 2:]
+        j = 0
+        while j < len(rest) and rest[j] in "-'\" \t":
+            j += 1
+        k = j
+        while k < len(rest) and (rest[k].isalnum() or rest[k] == "_"):
+            k += 1
+        word = rest[j:k]
+        if not word:
+            cmd = cmd[:m] + " " + cmd[m + 2:]
+            continue
+        term = re.search(r"\n[ \t]*" + re.escape(word) + r"\b", cmd[m:])
+        if not term:
+            return cmd[:m]
+        cmd = cmd[:m] + " " + cmd[m + term.end():]
+
+
 def _head_tool(seg):
     toks = seg.strip().split()
     i = 0
     while i < len(toks):
         t = toks[i]
         if "=" in t and not t.startswith(("-", "/")) and "/" not in t.split("=", 1)[0]:
-            i += 1; continue
+            i += 1
+            continue
         if t in _TOOL_PREFIX:
-            i += 1; continue
+            i += 1
+            continue
         if t in _TOOL_PREFIX_ARG:
             i += 1
             if i < len(toks) and re.match(r"^[\d.]+[smhd]?$", toks[i]):
                 i += 1
             continue
         if t.startswith("-"):
-            i += 1; continue
+            i += 1
+            continue
         break
     if i >= len(toks):
         return None
     tool = os.path.basename(toks[i].strip("'\"`")).lower()
-    if not re.match(r"^[a-z0-9][\w.+-]*$", tool) or tool in _TOOL_NOISE:
+    if tool not in _TOOL_BINS:
         return None
     return _TOOL_ALIAS.get(tool, tool)
 
@@ -1558,7 +1593,7 @@ def tools(argv):
                 continue
             for cmd in _find_commands(ev):
                 cmds += 1
-                norm = cmd
+                norm = _strip_heredocs(cmd)
                 for op in ("&&", "||", "$(", "2>", ">>"):
                     norm = norm.replace(op, ";")
                 for seg in re.split(r"[;\n|&`()<>]", norm):
@@ -1570,15 +1605,13 @@ def tools(argv):
         print(f"no shell-tool invocations found in logs ({scope}).")
         print("(The openai backend logs only counts, not command text, so it cannot be broken down here.)")
         return 0
-    items = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:30]
+    items = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
     mx = items[0][1]
     namew = min(max(len(k) for k, _ in items), 16)
     print(f"Tool usage ({scope}) - shell commands that invoked each tool; {cmds} commands parsed\n")
     for name, n in items:
         bar = "\u2588" * max(1, round(n / mx * 40))
         print(f"  {name[:namew]:<{namew}}  {paint(bar, 'cyan')} {n}")
-    if len(counts) > 30:
-        print(f"\n  ... and {len(counts) - 30} more")
     return 0
 
 
