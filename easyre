@@ -1506,7 +1506,10 @@ _TOOL_PREFIX = {"sudo", "env", "nohup", "time", "xvfb-run", "stdbuf", "nice", "i
 _TOOL_PREFIX_ARG = {"timeout"}
 _TOOL_ALIAS = {"python3": "python", "pypy3": "python", "pip3": "pip", "egrep": "grep",
                "fgrep": "grep", "r2": "radare2", "wine64": "wine", "g++": "gcc",
-               "cc": "gcc", "7za": "7z", "apt": "apt-get"}
+               "cc": "gcc", "7za": "7z", "apt": "apt-get",
+               "analyzeheadless": "ghidra", "pyghidrarun": "ghidra", "prefetch": "ghidra"}
+# A command that reads Ghidra's output (decompiled.c, the prefetch folder) used Ghidra too.
+_GHIDRA_OUT = re.compile(r"decompiled\.c|prefetch[\w-]*/")
 _TOOL_BINS = set((
     "python python3 pypy3 pip pip3 uv sed awk gawk perl rg grep egrep fgrep find "
     "xxd hexdump od file diec exiftool jq node npx npm 7z 7za unzip tar gzip gunzip xz zip "
@@ -1602,12 +1605,17 @@ def _tool_counts(jobs):
             for cmd in _find_commands(ev):
                 cmds += 1
                 norm = _strip_heredocs(cmd)
+                ghidra = bool(_GHIDRA_OUT.search(norm))
                 for op in ("&&", "||", "$(", "2>", ">>"):
                     norm = norm.replace(op, ";")
                 for seg in re.split(r"[;\n|&`()<>]", norm):
                     tool = _head_tool(seg)
-                    if tool:
+                    if tool == "ghidra":
+                        ghidra = True
+                    elif tool:
                         counts[tool] = counts.get(tool, 0) + 1
+                if ghidra:
+                    counts["ghidra"] = counts.get("ghidra", 0) + 1
     return counts, cmds
 
 
