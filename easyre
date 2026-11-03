@@ -10,6 +10,7 @@
   easyre open [JOB] [folder]       (host) open the newest job's report, tutor chat or folder
   easyre doctor                    check that the setup works
   easyre stats                     time, tokens and cost per model over all jobs
+  easyre tools [JOB]               bar chart of which shell tools the agent used (all jobs, or one)
   easyre close JOB                 mark a job as closed (resume reopens it)
   easyre rm JOB... | --FILTER [-y] delete job folders; filters: --open --closed --unsolved --solved --unverified --all
   easyre login claude|codex        authenticate a backend
@@ -1487,6 +1488,100 @@ def stats(_):
     return 0
 
 
+# Shell-command tool usage, counted from each job's log.jsonl.
+_TOOL_PREFIX = {"sudo", "env", "nohup", "time", "xvfb-run", "stdbuf", "nice", "ionice",
+                "exec", "command", "builtin", "do", "then", "else", "\\"}
+_TOOL_PREFIX_ARG = {"timeout"}
+_TOOL_NOISE = {"cd", "echo", "ls", "cat", "mkdir", "cp", "mv", "rm", "rmdir", "touch", "chmod",
+               "chown", "export", "set", "unset", "true", "false", "sleep", "pwd", "head", "tail",
+               "wc", "sort", "uniq", "tr", "cut", "printf", "test", "read", "kill", "pkill", "pgrep",
+               "source", ".", ":", "return", "fi", "done", "while", "for", "if", "elif", "case", "esac",
+               "ln", "mktemp", "tee", "yes", "clear", "basename", "dirname", "seq", "tput", "stat",
+               "df", "du", "free", "dmesg", "export", "eval", "wait", "trap"}
+_TOOL_ALIAS = {"python3": "python", "pip3": "pip", "egrep": "grep", "fgrep": "grep"}
+
+
+def _find_commands(ev):
+    """Yield every string under a key named 'command' (Claude tool_use input.command, codex item.command)."""
+    stack = [ev]
+    while stack:
+        x = stack.pop()
+        if isinstance(x, dict):
+            for k, v in x.items():
+                if k == "command" and isinstance(v, str):
+                    yield v
+                else:
+                    stack.append(v)
+        elif isinstance(x, list):
+            stack.extend(x)
+
+
+def _head_tool(seg):
+    toks = seg.strip().split()
+    i = 0
+    while i < len(toks):
+        t = toks[i]
+        if "=" in t and not t.startswith(("-", "/")) and "/" not in t.split("=", 1)[0]:
+            i += 1; continue
+        if t in _TOOL_PREFIX:
+            i += 1; continue
+        if t in _TOOL_PREFIX_ARG:
+            i += 1
+            if i < len(toks) and re.match(r"^[\d.]+[smhd]?$", toks[i]):
+                i += 1
+            continue
+        if t.startswith("-"):
+            i += 1; continue
+        break
+    if i >= len(toks):
+        return None
+    tool = os.path.basename(toks[i].strip("'\"`")).lower()
+    if not re.match(r"^[a-z0-9][\w.+-]*$", tool) or tool in _TOOL_NOISE:
+        return None
+    return _TOOL_ALIAS.get(tool, tool)
+
+
+def tools(argv):
+    one = argv[0] if argv and not argv[0].startswith("-") else None
+    jobs = [find_job(one)] if one else all_jobs()
+    counts, cmds = {}, 0
+    for d in jobs:
+        lf = meta(d) / "log.jsonl"
+        if not lf.exists():
+            continue
+        for line in open(lf, errors="replace"):
+            if '"command"' not in line:
+                continue
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            for cmd in _find_commands(ev):
+                cmds += 1
+                norm = cmd
+                for op in ("&&", "||", "$(", "2>", ">>"):
+                    norm = norm.replace(op, ";")
+                for seg in re.split(r"[;\n|&`()<>]", norm):
+                    tool = _head_tool(seg)
+                    if tool:
+                        counts[tool] = counts.get(tool, 0) + 1
+    scope = one if one else f"{len(jobs)} job(s)"
+    if not counts:
+        print(f"no shell-tool invocations found in logs ({scope}).")
+        print("(The openai backend logs only counts, not command text, so it cannot be broken down here.)")
+        return 0
+    items = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:30]
+    mx = items[0][1]
+    namew = min(max(len(k) for k, _ in items), 16)
+    print(f"Tool usage ({scope}) - shell commands that invoked each tool; {cmds} commands parsed\n")
+    for name, n in items:
+        bar = "\u2588" * max(1, round(n / mx * 40))
+        print(f"  {name[:namew]:<{namew}}  {paint(bar, 'cyan')} {n}")
+    if len(counts) > 30:
+        print(f"\n  ... and {len(counts) - 30} more")
+    return 0
+
+
 def login(argv):
     what = argv[0] if argv else ""
     if what == "claude":
@@ -1524,7 +1619,7 @@ def main():
         print(__doc__)
         return 0
     cmd, rest = a[0], a[1:]
-    simple = {"check": check, "done": done, "hint": hint, "jobs": jobs, "login": login, "profiles": profiles, "close": close, "rm": remove, "doctor": doctor, "tutor": tutor, "stats": stats}
+    simple = {"check": check, "done": done, "hint": hint, "jobs": jobs, "login": login, "profiles": profiles, "close": close, "rm": remove, "doctor": doctor, "tutor": tutor, "stats": stats, "tools": tools}
     if cmd in simple:
         return simple[cmd](rest)
     if cmd not in ("run", "resume"):

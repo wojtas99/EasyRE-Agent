@@ -154,6 +154,7 @@ easyre open [JOB] [folder]      open a job's report (or tutor chat, or folder)
 easyre profiles                 list model profiles
 easyre doctor                   check that the setup works
 easyre stats                    time, tokens and cost per model
+easyre tools [JOB]              bar chart of the shell tools the agent used
 easyre close JOB                mark a job as closed (resume reopens it)
 easyre rm JOB... | --FILTER     delete job folders; filters: --open --closed --unsolved --solved --unverified --all
 easyre login claude|codex       authenticate a backend
@@ -412,6 +413,13 @@ api_key_env = "OPENROUTER_API_KEY"
 ```
 
 `easyre stats` sums time, tokens and cost per model over all your jobs. Claude reports its cost itself; this is the API-equivalent price, and a subscription costs nothing extra. For other APIs, add `price_in` and `price_out` (USD per 1M tokens) to the profile in `config/backends.toml`.
+
+```powershell
+.\easyre.cmd tools               # all jobs
+.\easyre.cmd tools ThreatInvaders  # one job
+```
+
+`easyre tools` counts which tools the agent's shell commands invoked, read from each job's `.easyre/log.jsonl`, and draws a horizontal bar chart. A chained command (`a | b; c`) counts every tool in it; plain shell glue (`cd`, `ls`, `cat`, `echo`, ...) is left out. It shows what the agent leaned on (decompilers, `tshark`, scripting) and what it never touched. Works for the `claude` and `codex` backends; the `openai` backend logs only call counts, so it cannot be broken down.
 
 ---
 
