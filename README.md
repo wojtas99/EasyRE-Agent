@@ -415,11 +415,12 @@ api_key_env = "OPENROUTER_API_KEY"
 `easyre stats` sums time, tokens and cost per model over all your jobs. Claude reports its cost itself; this is the API-equivalent price, and a subscription costs nothing extra. For other APIs, add `price_in` and `price_out` (USD per 1M tokens) to the profile in `config/backends.toml`.
 
 ```powershell
-.\easyre.cmd tools               # all jobs
-.\easyre.cmd tools ThreatInvaders  # one job
+.\easyre.cmd tools                 # all jobs (terminal)
+.\easyre.cmd tools ThreatInvaders  # one job (terminal + writes tools.svg)
+.\easyre.cmd tools --svg all.svg   # all jobs, also write an SVG
 ```
 
-`easyre tools` counts which tools the agent's shell commands invoked, read from each job's `.easyre/log.jsonl`, and draws a horizontal bar chart. A chained command (`a | b; c`) counts every tool in it; plain shell glue (`cd`, `ls`, `cat`, `echo`, ...) is left out. It shows what the agent leaned on (decompilers, `tshark`, scripting) and what it never touched. Works for the `claude` and `codex` backends; the `openai` backend logs only call counts, so it cannot be broken down.
+`easyre tools` counts which tools the agent's shell commands invoked, read from each job's `.easyre/log.jsonl`, and draws a horizontal bar chart. A chained command (`a | b; c`) counts every tool in it; here-document bodies (pasted scripts) and plain shell glue (`cd`, `ls`, `cat`, `echo`, ...) are left out, so only real tools show. For a single job it also writes a dark-theme `tools.svg` bar chart into the job folder (every solved job gets one automatically); `--svg PATH` sets the file, and `easyre stats` prints the same chart aggregated over all jobs. It shows what the agent leaned on (decompilers, `tshark`, scripting) and what it never touched. Works for the `claude` and `codex` backends; the `openai` backend logs only call counts, so it cannot be broken down.
 
 ---
 

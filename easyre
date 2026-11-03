@@ -10,9 +10,9 @@
   easyre open [JOB] [folder]       (host) open the newest job's report, tutor chat or folder
   easyre doctor                    check that the setup works
   easyre stats                     time, tokens and cost per model over all jobs
-  easyre tools [JOB]               bar chart of which shell tools the agent used (all jobs, or one)
+  easyre tools [JOB] [--svg P]     bar chart of which shell tools the agent used; one JOB also writes tools.svg
   easyre close JOB                 mark a job as closed (resume reopens it)
-  easyre rm JOB... | --FILTER [-y] delete job folders; filters: --open --closed --unsolved --solved --unverified --all
+  easyre rm JOB... | --FILTER [-y] delete job folders; filters: --open --closed --unsolved --solved --unverified --tutor --all
   easyre login claude|codex        authenticate a backend
   easyre check [--final] CANDIDATE (agent) verify a candidate answer (--final: submit without a verifier)
   easyre done                      (agent, hint mode) mark hints as finished
@@ -1145,6 +1145,12 @@ def report(job, cfg, why):
     elif not body.strip() and (job / "agent" / "notes.md").exists():
         body = "## Agent notes\n\n" + (job / "agent" / "notes.md").read_text()
     (job / "report.md").write_text("\n".join(head) + "\n\n---\n" + body)
+    try:
+        c, _ = _tool_counts([job])
+        if c:
+            _tool_svg(c, f"Tool usage - {cfg['name']}", str(job / "tools.svg"))
+    except Exception:
+        pass
     log(f"{status} -> {job}/report.md")
     print(job / "report.md")
     return 0 if ans or (m / "DONE").exists() else 1
@@ -1315,11 +1321,11 @@ def remove(argv):
     names = [a for a in argv if not a.startswith("-")]
     groups = {"--open": {"open"}, "--closed": {"closed"}, "--unsolved": {"open", "closed"},
               "--solved": {"solved", "hints"}, "--unverified": {"unverified"},
-              "--all": {"open", "closed", "solved", "hints", "unverified"}}
+              "--tutor": {"tutor"}, "--all": {"open", "closed", "solved", "hints", "unverified", "tutor"}}
     wanted = set().union(*[groups[a] for a in argv if a in groups])
     unknown = [a for a in argv if a.startswith("-") and a not in groups and a != "-y"]
     if unknown or not (wanted or names):
-        sys.exit("usage: easyre rm JOB [JOB...] | easyre rm --open|--closed|--unsolved|--solved|--all [-y]")
+        sys.exit("usage: easyre rm JOB [JOB...] | easyre rm --open|--closed|--unsolved|--solved|--unverified|--tutor|--all [-y]")
     targets = [find_job(n) for n in names]
     targets += [d for d in all_jobs() if job_status(d) in wanted and d not in targets]
     if not targets:
@@ -1485,6 +1491,10 @@ def stats(_):
     print(f"{'TOTAL':43} {tot['jobs']:>4} {tot['done']:>4} {fmt_time(tot['time']):>7} {tot['out']:>11,} {tot['in']:>11,} {fmt_cost(tot['cost']):>9}")
     print("\nCOST for Claude is the API-equivalent price (a subscription costs nothing extra).")
     print("* = cost unknown for some jobs: add price_in / price_out (USD per 1M tokens) to the profile in config/backends.toml.")
+    counts, cmds = _tool_counts(all_jobs())
+    if counts:
+        print(f"\nTool usage across all jobs ({cmds} shell commands):\n")
+        print("\n".join(_bar_lines(counts)))
     return 0
 
 
@@ -1576,9 +1586,7 @@ def _head_tool(seg):
     return _TOOL_ALIAS.get(tool, tool)
 
 
-def tools(argv):
-    one = argv[0] if argv and not argv[0].startswith("-") else None
-    jobs = [find_job(one)] if one else all_jobs()
+def _tool_counts(jobs):
     counts, cmds = {}, 0
     for d in jobs:
         lf = meta(d) / "log.jsonl"
@@ -1600,18 +1608,72 @@ def tools(argv):
                     tool = _head_tool(seg)
                     if tool:
                         counts[tool] = counts.get(tool, 0) + 1
+    return counts, cmds
+
+
+def _bar_lines(counts):
+    items = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    if not items:
+        return []
+    mx = items[0][1]
+    namew = min(max(len(k) for k, _ in items), 16)
+    block = chr(0x2588)
+    return [f"  {name[:namew]:<{namew}}  {paint(block * max(1, round(n / mx * 40)), 'cyan')} {n}"
+            for name, n in items]
+
+
+def _tool_svg(counts, title, path):
+    items = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:30]
+    if not items:
+        return None
+    mx = items[0][1]
+    rowh, barw, lblw, top, pad = 26, 420, 160, 56, 20
+    w, h = lblw + barw + 90, top + rowh * len(items) + pad
+    bg, fg, dim, cyan = "#0b0e14", "#c9d1d9", "#6b7688", "#39c5cf"
+    esc = lambda s: s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    out = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" font-family="monospace" font-size="13">',
+           f'<rect width="{w}" height="{h}" fill="{bg}"/>',
+           f'<text x="{pad}" y="32" fill="{fg}" font-size="16" font-weight="bold">{esc(title)}</text>']
+    for i, (name, n) in enumerate(items):
+        y = top + i * rowh
+        bw = max(2, round(n / mx * barw))
+        out.append(f'<text x="{pad}" y="{y + 14}" fill="{dim}">{esc(name[:22])}</text>')
+        out.append(f'<rect x="{lblw}" y="{y + 2}" width="{bw}" height="16" rx="3" fill="{cyan}"/>')
+        out.append(f'<text x="{lblw + bw + 6}" y="{y + 14}" fill="{fg}">{n}</text>')
+    out.append("</svg>")
+    Path(path).write_text("\n".join(out))
+    return path
+
+
+def tools(argv):
+    args = list(argv)
+    want_svg = "--svg" in args
+    svg_path = None
+    if want_svg:
+        k = args.index("--svg")
+        del args[k]
+        if k < len(args) and not args[k].startswith("-"):
+            svg_path = args[k]
+            del args[k]
+    one = args[0] if args and not args[0].startswith("-") else None
+    jobs = [find_job(one)] if one else all_jobs()
+    counts, cmds = _tool_counts(jobs)
     scope = one if one else f"{len(jobs)} job(s)"
     if not counts:
         print(f"no shell-tool invocations found in logs ({scope}).")
         print("(The openai backend logs only counts, not command text, so it cannot be broken down here.)")
         return 0
-    items = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
-    mx = items[0][1]
-    namew = min(max(len(k) for k, _ in items), 16)
     print(f"Tool usage ({scope}) - shell commands that invoked each tool; {cmds} commands parsed\n")
-    for name, n in items:
-        bar = "\u2588" * max(1, round(n / mx * 40))
-        print(f"  {name[:namew]:<{namew}}  {paint(bar, 'cyan')} {n}")
+    print("\n".join(_bar_lines(counts)))
+    dest = None
+    if one:
+        dest = svg_path or str(jobs[0] / "tools.svg")
+    elif want_svg:
+        dest = svg_path or str(JOBS / "tools.svg")
+    if dest:
+        p = _tool_svg(counts, f"Tool usage - {scope}", dest)
+        if p:
+            print(f"\nchart written: {p}")
     return 0
 
 
