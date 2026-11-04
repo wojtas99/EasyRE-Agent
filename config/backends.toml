@@ -9,9 +9,9 @@ default = "claude-opus"
 # always pick the newest model of that family.
 #
 # Optional per profile: effort = reasoning depth, overridden by --effort.
-#   claude: low | medium | high | xhigh | max   (Claude Code --effort)
-#   codex:  minimal | low | medium | high | xhigh   (model_reasoning_effort)
-#   openai: low | medium | high (reasoning models only; others reject it)
+#   claude: low | medium | high | xhigh | max   ("extra" = xhigh; default high, medium on Opus 5.5 / Haiku 5.5)
+#   codex:  none | minimal | low | medium | high | xhigh | max   (default medium; model-dependent)
+#   openai: none | minimal | low | medium | high | xhigh | max   (reasoning models only; model-dependent)
 # Example:  effort = "xhigh"   Unset = the backend's own default.
 
 [profiles.claude-opus]

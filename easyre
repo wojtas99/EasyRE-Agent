@@ -26,7 +26,7 @@ run/resume options:
   --profile NAME                   model profile from config/backends.toml
   --backend claude|codex|openai    default: claude
   --model NAME                     backend model (claude: claude-opus-5-5 or alias opus, codex: gpt-..., openai: any)
-  --effort LEVEL                   reasoning effort (claude: low..max, codex: minimal..xhigh, openai: low/medium/high)
+  --effort LEVEL                   reasoning effort: claude low/medium/high/xhigh(=extra)/max; codex, openai none..max (model-dependent)
   --mode solve|hint|tutor          default: solve
   --budget-min N                   wall clock budget in minutes (default 120)
   --budget-tokens N                token budget (default: none)
@@ -681,22 +681,31 @@ def parse_codex(ev, cfg):
 CONTINUE = "You stopped before finishing. Re-read /work/agent/notes.md, pick the most promising unexplored lead, and keep going."
 
 
-# Reasoning effort per backend. Claude Code: --effort; Codex: model_reasoning_effort;
-# OpenAI-compatible: reasoning_effort (sent only when set: non-reasoning models reject it).
+# Reasoning effort per backend (official lists, model-dependent):
+#   claude: Claude Code --effort; levels low..max ("extra" in the Claude app = xhigh).
+#           Default high, but medium on Opus 5.5 / Haiku 5.5.
+#   codex:  -c model_reasoning_effort; codex also forwards values it does not know.
+#   openai: reasoning_effort in the request body, sent only when set.
 EFFORTS = {"claude": ("low", "medium", "high", "xhigh", "max"),
-           "codex": ("minimal", "low", "medium", "high", "xhigh"),
-           "openai": ("none", "minimal", "low", "medium", "high", "xhigh")}
+           "codex": ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "persistent"),
+           "openai": ("none", "minimal", "low", "medium", "high", "xhigh", "max")}
+_EFFORT_WARNED = set()
 
 
 def effort_for(cfg):
     e = (cfg.get("effort") or "").strip().lower()
     if not e:
         return ""
+    # The Claude app labels xhigh as "Extra"; the CLIs take "xhigh".
+    e = {"extra": "xhigh", "extra-high": "xhigh", "extra_high": "xhigh", "extrahigh": "xhigh"}.get(e, e)
     b = cfg.get("backend") or "claude"
-    if b == "codex" and e == "max":
-        e = "xhigh"
-    if e not in EFFORTS.get(b, ()):
-        sys.exit(f"--effort {e!r} is not valid for the {b} backend; use one of: {', '.join(EFFORTS.get(b, ()))}")
+    known = EFFORTS.get(b, ())
+    if e not in known:
+        if b == "claude":
+            sys.exit(f"--effort {e!r} is not valid for Claude; use one of: {', '.join(known)} (extra = xhigh)")
+        if (b, e) not in _EFFORT_WARNED:
+            _EFFORT_WARNED.add((b, e))
+            log(f"note: effort {e!r} is not a known {b} level ({', '.join(known)}); passing it on, the model decides")
     return e
 
 

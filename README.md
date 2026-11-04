@@ -170,7 +170,7 @@ easyre login claude|codex       authenticate a backend
 | `--profile` | Model profile from `config/backends.toml` |
 | `--backend` | `claude` (default), `codex` or `openai` |
 | `--model` | Model name for the backend |
-| `--effort LEVEL` | Reasoning effort. Claude: `low`/`medium`/`high`/`xhigh`/`max`; Codex: `minimal`..`xhigh` (`max` becomes `xhigh`); OpenAI-compatible: `low`/`medium`/`high`, reasoning models only. Unset = the backend default. A profile can set `effort = "..."` in `config/backends.toml`. |
+| `--effort LEVEL` | Reasoning effort. **Claude:** `low`, `medium`, `high`, `xhigh` (`extra` in the Claude app; both work), `max`; default is `high`, but `medium` on Opus 5.5 and Haiku 5.5. **Codex:** `none`, `minimal`, `low`, `medium` (default), `high`, `xhigh`, `max` (support depends on the model). **OpenAI-compatible:** the same names, sent as `reasoning_effort` only when set (non-reasoning models reject it). Unset = the backend default. A profile can set `effort = "..."` in `config/backends.toml`. |
 | `--mode` | `solve` (default), `hint` or `tutor` |
 | `--budget-min` / `--budget-tokens` | Time budget in minutes (default 120) and output-token budget |
 | `--logs` | Stream the agent's commands live instead of the progress bar |
