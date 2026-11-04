@@ -7,6 +7,12 @@ default = "claude-opus"
 # Claude models use full IDs, so every job runs on a known version. Update them
 # when a new model comes out. The aliases opus / sonnet / haiku also work and
 # always pick the newest model of that family.
+#
+# Optional per profile: effort = reasoning depth, overridden by --effort.
+#   claude: low | medium | high | xhigh | max   (Claude Code --effort)
+#   codex:  minimal | low | medium | high | xhigh   (model_reasoning_effort)
+#   openai: low | medium | high (reasoning models only; others reject it)
+# Example:  effort = "xhigh"   Unset = the backend's own default.
 
 [profiles.claude-opus]
 backend = "claude"

@@ -26,6 +26,7 @@ run/resume options:
   --profile NAME                   model profile from config/backends.toml
   --backend claude|codex|openai    default: claude
   --model NAME                     backend model (claude: claude-opus-5-5 or alias opus, codex: gpt-..., openai: any)
+  --effort LEVEL                   reasoning effort (claude: low..max, codex: minimal..xhigh, openai: low/medium/high)
   --mode solve|hint|tutor          default: solve
   --budget-min N                   wall clock budget in minutes (default 120)
   --budget-tokens N                token budget (default: none)
@@ -499,7 +500,7 @@ def prepare(args):
     else:
         extract(target, src)
     cfg = {"name": name, "target": str(target), "desc": desc.strip(), "success": args.success, "flag_format": args.flag_format, "flag_sha256": args.flag_sha256,
-           "verify": args.verify, "backend": args.backend, "model": args.model, "mode": args.mode,
+           "verify": args.verify, "backend": args.backend, "model": args.model, "effort": args.effort, "mode": args.mode,
            "budget_min": args.budget_min, "budget_tokens": args.budget_tokens, "created": time.strftime("%F %T"),
            "elapsed_s": 0, "tokens": 0, "session": None}
     link_work(job)
@@ -680,11 +681,37 @@ def parse_codex(ev, cfg):
 CONTINUE = "You stopped before finishing. Re-read /work/agent/notes.md, pick the most promising unexplored lead, and keep going."
 
 
+# Reasoning effort per backend. Claude Code: --effort; Codex: model_reasoning_effort;
+# OpenAI-compatible: reasoning_effort (sent only when set: non-reasoning models reject it).
+EFFORTS = {"claude": ("low", "medium", "high", "xhigh", "max"),
+           "codex": ("minimal", "low", "medium", "high", "xhigh"),
+           "openai": ("none", "minimal", "low", "medium", "high", "xhigh")}
+
+
+def effort_for(cfg):
+    e = (cfg.get("effort") or "").strip().lower()
+    if not e:
+        return ""
+    b = cfg.get("backend") or "claude"
+    if b == "codex" and e == "max":
+        e = "xhigh"
+    if e not in EFFORTS.get(b, ()):
+        sys.exit(f"--effort {e!r} is not valid for the {b} backend; use one of: {', '.join(EFFORTS.get(b, ()))}")
+    return e
+
+
+def codex_effort(cfg):
+    e = effort_for(cfg)
+    return ["-c", f"model_reasoning_effort={e}"] if e else []
+
+
 def backend_claude(cfg, prompt, t0, extra):
     base = ["-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions",
             "--append-system-prompt", (meta() / "instructions.md").read_text()]
     if cfg.get("model"):
         base += ["--model", cfg["model"]]
+    if effort_for(cfg):
+        base += ["--effort", effort_for(cfg)]
     base += extra
     cfg["_base"] = cfg["tokens"]
     if cfg.get("session"):
@@ -698,8 +725,8 @@ def backend_codex(cfg, prompt, t0, extra):
         base += ["-m", cfg["model"]]
     base += extra
     if cfg.get("session"):
-        return run_cli(["codex", "exec", "resume", *base, cfg["session"], "-"], CONTINUE, cfg, t0, parse_codex)
-    return run_cli(["codex", "exec", *base, "-"], prompt, cfg, t0, parse_codex)
+        return run_cli(["codex", *codex_effort(cfg), "exec", "resume", *base, cfg["session"], "-"], CONTINUE, cfg, t0, parse_codex)
+    return run_cli(["codex", *codex_effort(cfg), "exec", *base, "-"], prompt, cfg, t0, parse_codex)
 
 
 TOOLS = [
@@ -747,6 +774,8 @@ def tool_call(name, a):
 def chat(msgs, cfg):
     base = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
     body = {"model": cfg.get("model") or os.environ.get("OPENAI_MODEL", "gpt-4.1"), "messages": msgs, "tools": TOOLS}
+    if effort_for(cfg):
+        body["reasoning_effort"] = effort_for(cfg)
     req = urllib.request.Request(base + "/chat/completions", data=json.dumps(body).encode(), method="POST",
                                  headers={"Content-Type": "application/json", "Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY', 'none')}"})
     with urllib.request.urlopen(req, timeout=600) as r:
@@ -844,6 +873,8 @@ def resolve_profile(args, cmd):
     if args.model is None:
         own = name == os.environ.get("EASYRE_PROFILE")
         args.model = (os.environ.get("EASYRE_MODEL") if own else None) or p.get("model")
+    if getattr(args, "effort", None) is None and p.get("effort"):
+        args.effort = p["effort"]
     return name
 
 
@@ -905,6 +936,7 @@ def setup_backend(cfg):
 def drive(job, cfg, interactive=False):
     link_work(job)
     apply_profile(cfg)
+    effort_for(cfg)
     PROG["hidden"] = cfg["mode"] in ("hint", "tutor")
     PROG["logs"] = (cfg.get("logs") or bool(os.environ.get("EASYRE_VERBOSE"))) and not PROG["hidden"]
     PROG["t0"] = time.time()
@@ -924,10 +956,11 @@ def drive(job, cfg, interactive=False):
     if interactive:
         if cfg["backend"] == "claude":
             c = ["claude", "--dangerously-skip-permissions", "--append-system-prompt", ins] + (["--model", cfg["model"]] if cfg.get("model") else [])
+            c += ["--effort", effort_for(cfg)] if effort_for(cfg) else []
             c += ["--resume", cfg["session"]] if cfg.get("session") else [prompt]
         elif cfg["backend"] == "codex":
-            c = ["codex", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust"] + (["-m", cfg["model"]] if cfg.get("model") else [])
-            c = (["codex", "resume", *c[1:], cfg["session"]] if cfg.get("session") else c + [prompt])
+            c = ["--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust"] + (["-m", cfg["model"]] if cfg.get("model") else [])
+            c = (["codex", *codex_effort(cfg), "resume", *c, cfg["session"]] if cfg.get("session") else ["codex", *codex_effort(cfg), *c, prompt])
         else:
             sys.exit("-i works with claude and codex backends")
         os.chdir(WORK)
@@ -988,6 +1021,8 @@ def tutor_turn(cfg, msg):
                "--append-system-prompt", (meta() / "instructions.md").read_text()]
         if cfg.get("model"):
             cmd += ["--model", cfg["model"]]
+        if effort_for(cfg):
+            cmd += ["--effort", effort_for(cfg)]
         if cfg.get("session"):
             cmd += ["--resume", cfg["session"]]
         cfg["_base"] = cfg["tokens"]
@@ -996,7 +1031,8 @@ def tutor_turn(cfg, msg):
         base = ["--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust", "--json"]
         if cfg.get("model"):
             base += ["-m", cfg["model"]]
-        cmd = ["codex", "exec", "resume", *base, cfg["session"], "-"] if cfg.get("session") else ["codex", "exec", *base, "-"]
+        cmd = (["codex", *codex_effort(cfg), "exec", "resume", *base, cfg["session"], "-"] if cfg.get("session")
+               else ["codex", *codex_effort(cfg), "exec", *base, "-"])
         return tutor_turn_cli(cmd, msg, cfg, parse_codex)
     hist = meta() / "openai_history.json"
     msgs = jload(hist) or [{"role": "system", "content": (meta() / "instructions.md").read_text()}]
@@ -1123,7 +1159,7 @@ def report(job, cfg, why):
             f"- Status: **{status}**",
             f"- Backend: {cfg['backend']}" + (f" (requested model: {cfg['model']})" if cfg.get("model") else ""),
             f"- Model: {', '.join(cfg.get('models_used') or []) or 'not reported by the backend'}",
-            f"- Mode: {cfg['mode']}",
+            f"- Mode: {cfg['mode']}" + (f" (reasoning effort: {cfg['effort']})" if cfg.get("effort") else ""),
             f"- Time: {cfg['elapsed_s'] // 60} min {cfg['elapsed_s'] % 60} s",
             f"- Tokens: {cfg['tokens']} out / {cfg.get('tokens_in', 0)} in (uncached)"]
     if cfg.get("cost_usd"):
@@ -1364,7 +1400,7 @@ def doctor(argv):
         return 1
     backend = p.get("backend", "claude")
     model = os.environ.get("EASYRE_MODEL") or p.get("model") or "(backend default)"
-    print(f"       backend={backend} model={model}")
+    print(f"       backend={backend} model={model} effort={p.get('effort') or 'default'}")
     cfg = {"profile": name}
     try:
         apply_profile(cfg)
@@ -1707,6 +1743,7 @@ def opts(p):
     p.add_argument("--profile")
     p.add_argument("--backend", choices=list(BACKENDS))
     p.add_argument("--model")
+    p.add_argument("--effort")
     p.add_argument("--mode", choices=["solve", "hint", "tutor"])
     p.add_argument("--budget-min", type=float)
     p.add_argument("--budget-tokens", type=int)
@@ -1755,7 +1792,7 @@ def main():
         for f in ("CLOSED",) + (("ANSWER", "CHECK", "DONE") if reopen else ()):
             (meta(job) / f).unlink(missing_ok=True)
         cfg = jload(meta(job) / "job.json")
-        for k in ("desc", "success", "flag_format", "flag_sha256", "verify", "backend", "model", "mode", "budget_min", "budget_tokens"):
+        for k in ("desc", "success", "flag_format", "flag_sha256", "verify", "backend", "model", "effort", "mode", "budget_min", "budget_tokens"):
             if getattr(args, k, None) is not None:
                 cfg[k] = getattr(args, k)
         if prof:
@@ -1768,7 +1805,7 @@ def main():
         resume_prefetch(job)
     if getattr(args, "logs", False):
         cfg["logs"] = True
-    log(f"job {job.name}: profile={cfg.get('profile') or '-'} backend={cfg['backend']} model={cfg.get('model')} mode={cfg['mode']} budget={cfg['budget_min']} min")
+    log(f"job {job.name}: profile={cfg.get('profile') or '-'} backend={cfg['backend']} model={cfg.get('model')} effort={cfg.get('effort') or 'default'} mode={cfg['mode']} budget={cfg['budget_min']} min")
     return drive(job, cfg, args.i)
 
 
